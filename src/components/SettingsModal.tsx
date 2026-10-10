@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Cloud, RefreshCw, Key, Check } from 'lucide-react';
+import { X, Cloud, RefreshCw, Key, Check, LogOut } from 'lucide-react';
 import { AuthManager } from '../services/auth';
 
 interface SettingsModalProps {
@@ -8,6 +8,7 @@ interface SettingsModalProps {
   onClose: () => void;
   onSaveUserCode: (newCode: string) => void;
   onSyncNow: () => void;
+  onLogout: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -16,6 +17,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   onSaveUserCode,
   onSyncNow,
+  onLogout,
 }) => {
   const [code, setCode] = useState(userCode);
   const [copied, setCopied] = useState(false);
@@ -28,12 +30,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       onSaveUserCode(code.trim().toUpperCase());
       onClose();
     }
-  };
-
-  const handleGenerate = () => {
-    const newCode = AuthManager.generateNewCode();
-    setCode(newCode);
-    onSaveUserCode(newCode);
   };
 
   const handleCopy = () => {
@@ -62,19 +58,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <form onSubmit={handleSave} className="flex flex-col gap-4 text-xs">
           <div>
             <label className="block text-xs font-medium text-[#c8c4d9] mb-1">
-              User Access Code (6 Characters)
+              Active Access Code
             </label>
             <p className="text-[#918ea2] text-[11px] mb-2">
-              Enter the exact user code from your Kairo Android app to synchronize tasks across both
-              devices.
+              Syncs in real-time with the Kairo Android app using this access code.
             </p>
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                maxLength={6}
+                maxLength={8}
                 value={code}
                 onChange={(e) => setCode(e.target.value.toUpperCase())}
-                placeholder="e.g. KAIR01"
+                placeholder="e.g. A3K9X2"
                 className="bg-[#12131a] border border-[#292931] rounded-xl px-3.5 py-2 text-sm text-white uppercase tracking-wider font-mono focus:border-[#5a45ff] outline-none flex-1"
               />
               <button
@@ -89,17 +84,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 type="submit"
                 className="px-4 py-2 rounded-xl bg-[#5a45ff] hover:bg-[#6e5aff] text-white font-semibold text-xs shadow-md transition-all active:scale-95"
               >
-                Connect
+                Update
               </button>
             </div>
           </div>
 
           <div className="bg-[#12131a] border border-[#292931] rounded-xl p-3 flex flex-col gap-2">
             <div className="flex items-center justify-between">
-              <span className="text-[#918ea2]">Supabase Connection:</span>
+              <span className="text-[#918ea2]">Supabase Realtime:</span>
               <span className="font-medium text-[#00f5a0] flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#00f5a0] animate-pulse" />
-                Live PostgREST & Realtime
+                Connected
               </span>
             </div>
             <div className="flex items-center justify-between">
@@ -111,10 +106,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="flex items-center justify-between pt-2 border-t border-[#292931]">
             <button
               type="button"
-              onClick={handleGenerate}
-              className="text-xs text-[#c5c0ff] hover:underline"
+              onClick={() => {
+                onClose();
+                onLogout();
+              }}
+              className="text-xs text-[#ffb4ab] hover:underline flex items-center gap-1.5"
             >
-              Generate New Code
+              <LogOut className="w-3.5 h-3.5" />
+              Switch Account / Log Out
             </button>
             <div className="flex items-center gap-2">
               <button

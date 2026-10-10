@@ -6,7 +6,6 @@ import {
   Settings,
   RefreshCw,
   Plus,
-  RotateCcw,
   SlidersHorizontal,
   ArrowUpDown,
   Download,
@@ -16,13 +15,11 @@ import {
   Infinity,
   Menu,
   ChevronDown,
-  AlertTriangle,
   Clock,
-  Sparkles,
 } from 'lucide-react';
 import { Task, Priority, TaskSection, TaskSort } from './types/task';
 import { SupabaseService } from './services/supabase';
-import { AuthManager } from './services/auth';
+import { AuthManager, UserSession } from './services/auth';
 import { TaskCard } from './components/TaskCard';
 import { BreadcrumbBar } from './components/BreadcrumbBar';
 import { CreateTaskModal } from './components/CreateTaskModal';
@@ -32,10 +29,14 @@ import { AdjustParentModal } from './components/AdjustParentModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { UndoDoneBar } from './components/UndoDoneBar';
 import { SettingsModal } from './components/SettingsModal';
+import { LoginScreen } from './components/LoginScreen';
 
 export const App: React.FC = () => {
-  // App & Authentication State
-  const [userCode, setUserCode] = useState<string>(AuthManager.getUserCode());
+  // Authentication Session
+  const [session, setSession] = useState<UserSession | null>(() => AuthManager.getSession());
+  const userCode = session?.code || '';
+
+  // App State
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -58,7 +59,7 @@ export const App: React.FC = () => {
   const [upcomingExpanded, setUpcomingExpanded] = useState<boolean>(false);
   const [completedExpanded, setCompletedExpanded] = useState<boolean>(false);
 
-  // Modals & Sheets
+  // Modals & Overlays
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [createSubtaskParent, setCreateSubtaskParent] = useState<Task | null>(null);
   const [createDefaultSection, setCreateDefaultSection] = useState<TaskSection>('TODAY');
@@ -86,6 +87,7 @@ export const App: React.FC = () => {
      Data Loading & Supabase Realtime Synchronization
      -------------------------------------------------------------------------- */
   const loadTasksFromSupabase = async (code = userCode) => {
+    if (!code) return;
     setIsSyncing(true);
     try {
       const data = await SupabaseService.fetchTasks(code);
@@ -100,6 +102,8 @@ export const App: React.FC = () => {
   };
 
   useEffect(() => {
+    if (!userCode) return;
+
     loadTasksFromSupabase(userCode);
 
     // Subscribe to real-time changes directly in Supabase
@@ -294,7 +298,6 @@ export const App: React.FC = () => {
   };
 
   const handleDeleteTask = async (task: Task) => {
-    // Delete task and its subtasks
     const toDeleteIds = new Set<string>([task.id]);
     const queue = [task.id];
     while (queue.length > 0) {
@@ -443,6 +446,17 @@ export const App: React.FC = () => {
   };
 
   /* --------------------------------------------------------------------------
+     Logout Handler
+     -------------------------------------------------------------------------- */
+  const handleLogout = () => {
+    AuthManager.clearSession();
+    setSession(null);
+    setTasks([]);
+    setBreadcrumbStack([]);
+    showToast('Logged out of workspace');
+  };
+
+  /* --------------------------------------------------------------------------
      Keyboard Shortcuts
      -------------------------------------------------------------------------- */
   useEffect(() => {
@@ -468,6 +482,19 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [breadcrumbStack]);
+
+  /* --------------------------------------------------------------------------
+     If user is NOT logged in, show Login Screen (Exact mobile authentication flow)
+     -------------------------------------------------------------------------- */
+  if (!session) {
+    return (
+      <LoginScreen
+        onLoginSuccess={(newSession) => {
+          setSession(newSession);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="flex w-full min-h-screen bg-[#12131a] text-[#e3e1ec]">
@@ -649,7 +676,7 @@ export const App: React.FC = () => {
             <div
               onClick={() => setShowSettingsModal(true)}
               className="flex items-center gap-2.5 pl-1 cursor-pointer"
-              title={`Account Code: ${userCode}`}
+              title={`Logged in as: ${userCode}`}
             >
               <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#5a45ff] to-[#00f5a0] text-white font-bold flex items-center justify-center text-xs ring-2 ring-[#292931] hover:ring-[#5a45ff]/60 transition-all active:scale-95 shadow-inner">
                 {userCode.slice(0, 2).toUpperCase()}
@@ -1203,10 +1230,11 @@ export const App: React.FC = () => {
         userCode={userCode}
         onClose={() => setShowSettingsModal(false)}
         onSaveUserCode={(newCode) => {
-          AuthManager.setUserCode(newCode);
-          setUserCode(newCode);
+          AuthManager.saveSession(newCode, session.name);
+          setSession({ code: newCode, name: session.name });
         }}
         onSyncNow={() => loadTasksFromSupabase()}
+        onLogout={handleLogout}
       />
 
       {/* Undo Notification Bar */}
