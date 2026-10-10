@@ -2,6 +2,17 @@ export type Priority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
 
 export type TaskSection = 'OVERDUE' | 'TODAY' | 'UPCOMING' | 'COMPLETED';
 
+export type StatusFilter = 'ACTIVE' | 'COMPLETED';
+export type DateFilter = 'TODAY' | 'TOMORROW' | 'RANGE';
+
+export interface FilterCriteria {
+  selectedStatuses: StatusFilter[];
+  selectedPriorities: Priority[];
+  selectedDate: DateFilter | null;
+  dateRangeStart: number | null;
+  dateRangeEnd: number | null;
+}
+
 export type TaskSort =
   | 'DATE_NEAR'
   | 'DATE_LATE'
@@ -95,7 +106,7 @@ export function fromDto(dto: TaskDto): Task {
     repeatDates: dto.repeat_dates ?? null,
     parentId: dto.parent_id ?? null,
     position: dto.position ?? 0,
-    user_code: dto.user_code
+    user_code: dto.user_code,
   };
 }
 
@@ -126,6 +137,6 @@ export function toDto(task: Task, userCode: string): TaskDto {
     repeat_dates: task.repeatDates ?? null,
     parent_id: task.parentId ?? null,
     position: task.position ?? 0,
-    user_code: userCode
+    user_code: userCode,
   };
 }

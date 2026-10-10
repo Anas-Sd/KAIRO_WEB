@@ -6,7 +6,7 @@ import {
   Settings,
   RefreshCw,
   Plus,
-  SlidersHorizontal,
+  Filter,
   ArrowUpDown,
   ListTodo,
   Infinity,
@@ -15,9 +15,9 @@ import {
   Clock,
   LogOut,
   AlertTriangle,
-  FolderTree,
+  RotateCcw,
 } from 'lucide-react';
-import { Task, Priority, TaskSection, TaskSort } from './types/task';
+import { Task, Priority, TaskSort, FilterCriteria } from './types/task';
 import { SupabaseService } from './services/supabase';
 import { AuthManager, UserSession } from './services/auth';
 import { TaskCard } from './components/TaskCard';
@@ -30,6 +30,8 @@ import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { UndoDoneBar } from './components/UndoDoneBar';
 import { SettingsModal } from './components/SettingsModal';
 import { LoginScreen } from './components/LoginScreen';
+import { FilterModal } from './components/FilterModal';
+import { SortModal } from './components/SortModal';
 
 export const App: React.FC = () => {
   // Authentication Session
@@ -45,12 +47,18 @@ export const App: React.FC = () => {
   // Hierarchy Navigation (Android Breadcrumb Stack)
   const [breadcrumbStack, setBreadcrumbStack] = useState<Task[]>([]);
 
-  // Search, Filter & Sort
+  // Search, Filter & Sort (Exact Android Match)
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [priorityFilter, setPriorityFilter] = useState<string>('All');
+  const [filterCriteria, setFilterCriteria] = useState<FilterCriteria>({
+    selectedStatuses: [],
+    selectedPriorities: [],
+    selectedDate: null,
+    dateRangeStart: null,
+    dateRangeEnd: null,
+  });
   const [sortOption, setSortOption] = useState<TaskSort>('DATE_NEAR');
-  const [showFilterDropdown, setShowFilterDropdown] = useState<boolean>(false);
-  const [showSortDropdown, setShowSortDropdown] = useState<boolean>(false);
+  const [showFilterModal, setShowFilterModal] = useState<boolean>(false);
+  const [showSortModal, setShowSortModal] = useState<boolean>(false);
 
   // Section Accordion States (Overdue & Today expanded by default, rest collapsed)
   const [overdueExpanded, setOverdueExpanded] = useState<boolean>(true);
@@ -61,7 +69,6 @@ export const App: React.FC = () => {
   // Modals & Sheets
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [createSubtaskParent, setCreateSubtaskParent] = useState<Task | null>(null);
-  const [createDefaultSection, setCreateDefaultSection] = useState<TaskSection>('TODAY');
 
   const [selectedTaskForEdit, setSelectedTaskForEdit] = useState<Task | null>(null);
   const [selectedTaskForDetails, setSelectedTaskForDetails] = useState<Task | null>(null);
@@ -85,20 +92,23 @@ export const App: React.FC = () => {
   /* --------------------------------------------------------------------------
      Fetch Tasks & Supabase Realtime Subscription
      -------------------------------------------------------------------------- */
-  const loadTasksFromSupabase = useCallback(async (code: string) => {
-    if (!code) return;
-    setIsSyncing(true);
-    try {
-      const data = await SupabaseService.fetchTasks(code);
-      setTasks(data);
-    } catch (err: any) {
-      console.error('Failed to load from Supabase:', err);
-      showToast('Error syncing with database. Check network.');
-    } finally {
-      setIsLoading(false);
-      setIsSyncing(false);
-    }
-  }, [showToast]);
+  const loadTasksFromSupabase = useCallback(
+    async (code: string) => {
+      if (!code) return;
+      setIsSyncing(true);
+      try {
+        const data = await SupabaseService.fetchTasks(code);
+        setTasks(data);
+      } catch (err: any) {
+        console.error('Failed to load from Supabase:', err);
+        showToast('Error syncing with database. Check network.');
+      } finally {
+        setIsLoading(false);
+        setIsSyncing(false);
+      }
+    },
+    [showToast]
+  );
 
   useEffect(() => {
     if (!userCode) {
@@ -106,10 +116,8 @@ export const App: React.FC = () => {
       return;
     }
 
-    // Load initial tasks
     loadTasksFromSupabase(userCode);
 
-    // Subscribe to live realtime changes from Android or other web sessions
     const channel = SupabaseService.subscribeToTasks(userCode, () => {
       loadTasksFromSupabase(userCode);
     });
@@ -120,33 +128,99 @@ export const App: React.FC = () => {
   }, [userCode, loadTasksFromSupabase]);
 
   /* --------------------------------------------------------------------------
-     Hierarchy Scoping & Filter / Sort Engine
+     Date & Time Calculations (Exact Android Match)
      -------------------------------------------------------------------------- */
+  const isOverdue = useCallback((task: Task): boolean => {
+    if (task.isCompleted) return false;
+    if (task.dueDate && task.dueDate.toLowerCase().includes('yesterday')) return true;
+    if (task.section === 'OVERDUE') return true;
+
+    if (task.dueDateMillis) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      if (task.dueDateMillis < todayStart.getTime()) {
+        return true;
+      }
+    }
+    return false;
+  }, []);
+
+  const isToday = useCallback(
+    (task: Task): boolean => {
+      if (task.isCompleted) return false;
+      if (isOverdue(task)) return false;
+      if (task.dueDate && task.dueDate.toLowerCase().includes('today')) return true;
+      if (task.section === 'TODAY') return true;
+
+      if (task.dueDateMillis) {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = todayStart.getTime() + 86400000;
+        return task.dueDateMillis >= todayStart.getTime() && task.dueDateMillis < todayEnd;
+      }
+      return false;
+    },
+    [isOverdue]
+  );
+
+  const isTomorrow = useCallback(
+    (task: Task): boolean => {
+      if (task.isCompleted) return false;
+      if (isOverdue(task)) return false;
+      if (task.dueDate && task.dueDate.toLowerCase().includes('tomorrow')) return true;
+
+      if (task.dueDateMillis) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrowStart = today.getTime() + 86400000;
+        const tomorrowEnd = tomorrowStart + 86400000;
+        return task.dueDateMillis >= tomorrowStart && task.dueDateMillis < tomorrowEnd;
+      }
+      return false;
+    },
+    [isOverdue]
+  );
+
+  const isUpcoming = useCallback(
+    (task: Task): boolean => {
+      if (task.isCompleted) return false;
+      if (isOverdue(task)) return false;
+      if (isToday(task)) return false;
+      return true;
+    },
+    [isOverdue, isToday]
+  );
+
+  /* --------------------------------------------------------------------------
+     Hierarchy Scoping & Exact Filter / Sort Engine
+     -------------------------------------------------------------------------- */
+  const isFilterActive = useMemo(() => {
+    return (
+      filterCriteria.selectedStatuses.length > 0 ||
+      filterCriteria.selectedPriorities.length > 0 ||
+      filterCriteria.selectedDate !== null
+    );
+  }, [filterCriteria]);
+
   const scopedTasks = useMemo(() => {
-    const isSearching = searchQuery.trim().length > 0;
+    const isSearchingOrFiltering = searchQuery.trim().length > 0 || isFilterActive;
 
     if (breadcrumbStack.length > 0) {
-      // Drilled into parent: show direct children of the active parent
       const currentParent = breadcrumbStack[breadcrumbStack.length - 1];
       return tasks.filter((t) => t.parentId === currentParent.id);
-    } else if (isSearching) {
-      // Searching globally across all tasks
+    } else if (isSearchingOrFiltering) {
+      // Global search/filter across all hierarchy levels (matching TaskViewModel.kt)
       return tasks;
     } else {
-      // Root workspace: show only top-level tasks
+      // Root view: top-level tasks only
       return tasks.filter((t) => !t.parentId);
     }
-  }, [tasks, breadcrumbStack, searchQuery]);
+  }, [tasks, breadcrumbStack, searchQuery, isFilterActive]);
 
   const filteredTasks = useMemo(() => {
     let result = [...scopedTasks];
 
-    // Priority filter
-    if (priorityFilter !== 'All') {
-      result = result.filter((t) => t.priority === priorityFilter.toUpperCase());
-    }
-
-    // Text search
+    // 1. Text Search Filter
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       result = result.filter(
@@ -157,7 +231,37 @@ export const App: React.FC = () => {
       );
     }
 
-    // Sorting
+    // 2. Status Filter (Active / Completed)
+    if (filterCriteria.selectedStatuses.length > 0) {
+      const showActive = filterCriteria.selectedStatuses.includes('ACTIVE');
+      const showCompleted = filterCriteria.selectedStatuses.includes('COMPLETED');
+      result = result.filter(
+        (task) => (showActive && !task.isCompleted) || (showCompleted && task.isCompleted)
+      );
+    }
+
+    // 3. Priority Filter (Low / Med / High / Urgent)
+    if (filterCriteria.selectedPriorities.length > 0) {
+      result = result.filter((task) => filterCriteria.selectedPriorities.includes(task.priority));
+    }
+
+    // 4. Due Date Filter
+    if (filterCriteria.selectedDate) {
+      if (filterCriteria.selectedDate === 'TODAY') {
+        result = result.filter((t) => isToday(t));
+      } else if (filterCriteria.selectedDate === 'TOMORROW') {
+        result = result.filter((t) => isTomorrow(t));
+      } else if (filterCriteria.selectedDate === 'RANGE') {
+        if (filterCriteria.dateRangeStart && filterCriteria.dateRangeEnd) {
+          result = result.filter((t) => {
+            const due = t.dueDateMillis || t.createdAt;
+            return due >= filterCriteria.dateRangeStart! && due <= filterCriteria.dateRangeEnd!;
+          });
+        }
+      }
+    }
+
+    // 5. Sort Order
     result.sort((a, b) => {
       if (sortOption === 'PRIORITY_HIGH') {
         const order: Record<Priority, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
@@ -181,47 +285,7 @@ export const App: React.FC = () => {
     });
 
     return result;
-  }, [scopedTasks, priorityFilter, searchQuery, sortOption]);
-
-  /* --------------------------------------------------------------------------
-     Android Dynamic Section Categorization (Exact Match to TaskViewModel.kt)
-     -------------------------------------------------------------------------- */
-  const isOverdue = useCallback((task: Task): boolean => {
-    if (task.isCompleted) return false;
-    if (task.dueDate && task.dueDate.toLowerCase().includes('yesterday')) return true;
-    if (task.section === 'OVERDUE') return true;
-
-    if (task.dueDateMillis) {
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      if (task.dueDateMillis < todayStart.getTime()) {
-        return true;
-      }
-    }
-    return false;
-  }, []);
-
-  const isToday = useCallback((task: Task): boolean => {
-    if (task.isCompleted) return false;
-    if (isOverdue(task)) return false;
-    if (task.dueDate && task.dueDate.toLowerCase().includes('today')) return true;
-    if (task.section === 'TODAY') return true;
-
-    if (task.dueDateMillis) {
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      const todayEnd = todayStart.getTime() + 86400000;
-      return task.dueDateMillis >= todayStart.getTime() && task.dueDateMillis < todayEnd;
-    }
-    return false;
-  }, [isOverdue]);
-
-  const isUpcoming = useCallback((task: Task): boolean => {
-    if (task.isCompleted) return false;
-    if (isOverdue(task)) return false;
-    if (isToday(task)) return false;
-    return true;
-  }, [isOverdue, isToday]);
+  }, [scopedTasks, searchQuery, filterCriteria, sortOption, isToday, isTomorrow]);
 
   const overdueTasks = useMemo(() => filteredTasks.filter((t) => isOverdue(t)), [filteredTasks, isOverdue]);
   const todayTasks = useMemo(() => filteredTasks.filter((t) => isToday(t)), [filteredTasks, isToday]);
@@ -244,10 +308,8 @@ export const App: React.FC = () => {
       updatedAt: Date.now(),
     };
 
-    // Optimistic UI update
     setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));
 
-    // Undo action
     setUndoTask({
       id: task.id,
       title: task.title,
@@ -288,7 +350,6 @@ export const App: React.FC = () => {
   };
 
   const handleCreateTask = async (taskData: Partial<Task>) => {
-    // Generate standard UUID v4 matching Supabase UUID column
     const taskId = crypto.randomUUID();
     const newTask: Task = {
       id: taskId,
@@ -330,11 +391,15 @@ export const App: React.FC = () => {
   };
 
   const handleUpdateTask = async (updatedTask: Task) => {
-    setTasks((prev) => prev.map((t) => (t.id === updatedTask.id ? updatedTask : t)));
+    const updatedWithTimestamp: Task = {
+      ...updatedTask,
+      updatedAt: Date.now(),
+    };
+    setTasks((prev) => prev.map((t) => (t.id === updatedTask.id ? updatedWithTimestamp : t)));
     showToast('Task updated');
 
     try {
-      await SupabaseService.upsertTask(updatedTask, userCode);
+      await SupabaseService.upsertTask(updatedWithTimestamp, userCode);
     } catch (err) {
       console.error('Supabase update failed:', err);
       showToast('Error saving update to cloud');
@@ -342,7 +407,6 @@ export const App: React.FC = () => {
   };
 
   const handleDeleteTask = async (task: Task) => {
-    // Collect all recursive descendant IDs
     const toDeleteIds: string[] = [task.id];
     const queue = [task.id];
     while (queue.length > 0) {
@@ -366,7 +430,7 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleAdjustParent = async (newParentId: string | null, _moveSubtasks: boolean) => {
+  const handleAdjustParent = async (newParentId: string | null) => {
     if (!selectedTaskForAdjustParent) return;
 
     const updated: Task = {
@@ -387,9 +451,6 @@ export const App: React.FC = () => {
     }
   };
 
-  /* --------------------------------------------------------------------------
-     Navigation & Hierarchy
-     -------------------------------------------------------------------------- */
   const handleDrillDown = (task: Task) => {
     setBreadcrumbStack((prev) => [...prev, task]);
   };
@@ -414,9 +475,23 @@ export const App: React.FC = () => {
     setShowSettingsModal(false);
   };
 
-  /* --------------------------------------------------------------------------
-     Render Login Screen if No Session
-     -------------------------------------------------------------------------- */
+  const getSortDisplayName = (sort: TaskSort) => {
+    switch (sort) {
+      case 'DATE_NEAR':
+        return 'Earliest First';
+      case 'DATE_LATE':
+        return 'Latest First';
+      case 'PRIORITY_HIGH':
+        return 'High Priority';
+      case 'PRIORITY_LOW':
+        return 'Low Priority';
+      case 'TITLE_AZ':
+        return 'Name (A-Z)';
+      case 'TITLE_ZA':
+        return 'Name (Z-A)';
+    }
+  };
+
   if (!session) {
     return (
       <LoginScreen
@@ -440,7 +515,6 @@ export const App: React.FC = () => {
         } bg-[#1a1b22] border-r border-[#292931] z-40 flex flex-col justify-between p-4 shadow-xl transition-all duration-200 hidden md:flex`}
       >
         <div className="flex flex-col gap-6">
-          {/* Logo Branding */}
           <div className="flex items-center justify-between px-2 pt-1">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#5a45ff] to-[#00f5a0] flex items-center justify-center shadow-lg shadow-[#5a45ff]/20 flex-shrink-0">
@@ -464,7 +538,6 @@ export const App: React.FC = () => {
             </button>
           </div>
 
-          {/* Navigation Items */}
           <nav className="flex flex-col gap-1">
             <button
               className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold bg-[#5a45ff]/15 text-[#c5c0ff] border border-[#5a45ff]/30 shadow-sm transition-all`}
@@ -480,7 +553,6 @@ export const App: React.FC = () => {
           </nav>
         </div>
 
-        {/* Sidebar Footer with Workspace info and Logout */}
         <div className="flex flex-col gap-2 pt-4 border-t border-[#292931]">
           <button
             onClick={() => setShowSettingsModal(true)}
@@ -517,13 +589,11 @@ export const App: React.FC = () => {
               {currentParentTask ? currentParentTask.title : 'Tasks'}
             </h2>
 
-            {/* Active Workspace Code Pill */}
             <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#1a1b22] border border-[#292931] text-[11px] text-[#c8c4d9]">
               <span className="w-1.5 h-1.5 rounded-full bg-[#00f5a0]" />
               <span className="font-mono text-white font-medium">{userCode}</span>
             </div>
 
-            {/* Syncing indicator */}
             {isSyncing && (
               <div className="flex items-center gap-1 text-[11px] text-[#918ea2]">
                 <RefreshCw className="w-3 h-3 animate-spin text-[#5a45ff]" />
@@ -532,7 +602,6 @@ export const App: React.FC = () => {
             )}
           </div>
 
-          {/* Action Bar */}
           <div className="flex items-center gap-2">
             <button
               onClick={() => loadTasksFromSupabase(userCode)}
@@ -554,10 +623,9 @@ export const App: React.FC = () => {
             <button
               onClick={() => {
                 setCreateSubtaskParent(currentParentTask);
-                setCreateDefaultSection('TODAY');
                 setShowCreateModal(true);
               }}
-              className="px-4 py-2 rounded-xl bg-[#5a45ff] hover:bg-[#6e5aff] text-white text-xs font-semibold shadow-md shadow-[#5a45ff]/25 transition-all flex items-center gap-1.5 active:scale-95"
+              className="px-4 py-2 rounded-xl bg-[#5a45ff] hover:bg-[#6e5aff] text-white text-xs font-semibold shadow-md shadow-[#5a45ff]/25 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               <span>{currentParentTask ? 'Add Subtask' : 'Add Task'}</span>
@@ -567,7 +635,6 @@ export const App: React.FC = () => {
 
         {/* Content Body */}
         <div className="flex-1 px-4 sm:px-6 py-6 max-w-5xl w-full mx-auto flex flex-col gap-5">
-          {/* Breadcrumb Bar when drilled down */}
           {breadcrumbStack.length > 0 && (
             <BreadcrumbBar
               breadcrumbStack={breadcrumbStack}
@@ -576,110 +643,72 @@ export const App: React.FC = () => {
             />
           )}
 
-          {/* Search, Filter & Sort Controls */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-[#1a1b22] border border-[#292931] rounded-2xl p-3">
-            {/* Search Input */}
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 text-[#918ea2] absolute left-3 top-2.5" />
+          {/* =============================================================
+              EXACT ANDROID FilterSortBar + Search Input
+             ============================================================= */}
+          <div className="flex flex-col gap-2.5">
+            {/* Search Input Bar */}
+            <div className="relative w-full">
+              <Search className="w-4 h-4 text-[#918ea2] absolute left-3.5 top-3" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search tasks, notes, locations..."
-                className="w-full bg-[#12131a] border border-[#292931] rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder:text-[#918ea2] focus:border-[#5a45ff] outline-none transition-all"
+                className="w-full bg-[#1a1b22] border border-[#292931] rounded-2xl pl-10 pr-4 py-2.5 text-xs text-white placeholder:text-[#918ea2] focus:border-[#5a45ff] outline-none transition-all"
               />
             </div>
 
-            {/* Filter & Sort Dropdowns */}
-            <div className="flex items-center gap-2 self-end sm:self-auto">
-              {/* Priority Filter */}
-              <div className="relative">
+            {/* Filter & Sort Bar (Matching FilterSortBar.kt) */}
+            <div className="flex items-center gap-2">
+              {/* Filter Button */}
+              <button
+                type="button"
+                onClick={() => setShowFilterModal(true)}
+                className={`h-11 px-4 rounded-2xl border text-xs font-medium flex items-center gap-2 transition-all cursor-pointer ${
+                  isFilterActive
+                    ? 'bg-[#1a1b22] border-[#5a45ff] text-white'
+                    : 'bg-[#1a1b22] border-[#292931] text-[#c8c4d9] hover:border-[#5a45ff]/40'
+                }`}
+              >
+                <Filter className={`w-4 h-4 ${isFilterActive ? 'text-[#5a45ff]' : 'text-[#c8c4d9]'}`} />
+                <span>Filter</span>
+                {isFilterActive && <span className="w-2 h-2 rounded-full bg-[#5a45ff]" />}
+              </button>
+
+              {/* Sort Button */}
+              <button
+                type="button"
+                onClick={() => setShowSortModal(true)}
+                className="flex-1 h-11 px-4 rounded-2xl bg-[#1a1b22] border border-[#292931] hover:border-[#5a45ff]/40 text-xs font-medium text-white flex items-center justify-between transition-all cursor-pointer"
+              >
+                <div className="flex items-center gap-2 truncate">
+                  <ArrowUpDown className="w-4 h-4 text-[#5a45ff] flex-shrink-0" />
+                  <span className="truncate">{getSortDisplayName(sortOption)}</span>
+                </div>
+                <ChevronDown className="w-4 h-4 text-[#918ea2] flex-shrink-0" />
+              </button>
+
+              {/* Reset Filter Button (Active when filter criteria applied) */}
+              {isFilterActive && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowFilterDropdown(!showFilterDropdown);
-                    setShowSortDropdown(false);
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all ${
-                    priorityFilter !== 'All'
-                      ? 'bg-[#5a45ff]/20 border-[#5a45ff] text-[#c5c0ff]'
-                      : 'bg-[#12131a] border-[#292931] text-[#c8c4d9] hover:bg-[#292931]'
-                  }`}
+                  onClick={() =>
+                    setFilterCriteria({
+                      selectedStatuses: [],
+                      selectedPriorities: [],
+                      selectedDate: null,
+                      dateRangeStart: null,
+                      dateRangeEnd: null,
+                    })
+                  }
+                  className="h-11 px-3 rounded-2xl bg-[#93000a]/20 border border-[#ffb4ab]/30 text-[#ffb4ab] text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Reset all filters"
                 >
-                  <SlidersHorizontal className="w-3.5 h-3.5 text-[#5a45ff]" />
-                  <span>{priorityFilter === 'All' ? 'Priority' : priorityFilter}</span>
-                  <ChevronDown className="w-3 h-3 text-[#918ea2]" />
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Reset</span>
                 </button>
-
-                {showFilterDropdown && (
-                  <>
-                    <div className="fixed inset-0 z-30" onClick={() => setShowFilterDropdown(false)} />
-                    <div className="absolute right-0 top-10 z-40 w-36 bg-[#1a1b22] border border-[#292931] rounded-xl p-1.5 shadow-xl flex flex-col gap-0.5">
-                      {['All', 'Urgent', 'High', 'Medium', 'Low'].map((p) => (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => {
-                            setPriorityFilter(p);
-                            setShowFilterDropdown(false);
-                          }}
-                          className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                            priorityFilter === p ? 'bg-[#5a45ff] text-white' : 'text-[#c8c4d9] hover:bg-[#292931]'
-                          }`}
-                        >
-                          {p}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Sort Order */}
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowSortDropdown(!showSortDropdown);
-                    setShowFilterDropdown(false);
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#12131a] border border-[#292931] hover:bg-[#292931] text-xs font-medium text-[#c8c4d9] transition-all"
-                >
-                  <ArrowUpDown className="w-3.5 h-3.5 text-[#5a45ff]" />
-                  <span>Sort</span>
-                  <ChevronDown className="w-3 h-3 text-[#918ea2]" />
-                </button>
-
-                {showSortDropdown && (
-                  <>
-                    <div className="fixed inset-0 z-30" onClick={() => setShowSortDropdown(false)} />
-                    <div className="absolute right-0 top-10 z-40 w-44 bg-[#1a1b22] border border-[#292931] rounded-xl p-1.5 shadow-xl flex flex-col gap-0.5">
-                      {[
-                        { label: 'Due Date: Earliest', value: 'DATE_NEAR' },
-                        { label: 'Due Date: Latest', value: 'DATE_LATE' },
-                        { label: 'Priority: High to Low', value: 'PRIORITY_HIGH' },
-                        { label: 'Priority: Low to High', value: 'PRIORITY_LOW' },
-                        { label: 'Title: A to Z', value: 'TITLE_AZ' },
-                        { label: 'Title: Z to A', value: 'TITLE_ZA' },
-                      ].map((s) => (
-                        <button
-                          key={s.value}
-                          type="button"
-                          onClick={() => {
-                            setSortOption(s.value as TaskSort);
-                            setShowSortDropdown(false);
-                          }}
-                          className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                            sortOption === s.value ? 'bg-[#5a45ff] text-white' : 'text-[#c8c4d9] hover:bg-[#292931]'
-                          }`}
-                        >
-                          {s.label}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
+              )}
             </div>
           </div>
 
@@ -691,15 +720,13 @@ export const App: React.FC = () => {
             </div>
           ) : (
             <div className="flex flex-col gap-6">
-              {/* =============================================================
-                  1. OVERDUE SECTION (Expanded by default)
-                 ============================================================= */}
+              {/* 1. OVERDUE SECTION (Expanded by default) */}
               {overdueTasks.length > 0 && (
                 <section className="flex flex-col gap-2.5">
                   <button
                     type="button"
                     onClick={() => setOverdueExpanded(!overdueExpanded)}
-                    className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#93000a]/15 border border-[#ffb4ab]/20 hover:bg-[#93000a]/25 text-[#ffb4ab] transition-all cursor-pointer"
+                    className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-[#93000a]/15 border border-[#ffb4ab]/20 hover:bg-[#93000a]/25 text-[#ffb4ab] transition-all cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
                       <AlertTriangle className="w-4 h-4 text-[#ffb4ab]" />
@@ -739,14 +766,12 @@ export const App: React.FC = () => {
                 </section>
               )}
 
-              {/* =============================================================
-                  2. TODAY SECTION (Expanded by default)
-                 ============================================================= */}
+              {/* 2. TODAY SECTION (Expanded by default) */}
               <section className="flex flex-col gap-2.5">
                 <button
                   type="button"
                   onClick={() => setTodayExpanded(!todayExpanded)}
-                  className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#1e1f26] border border-[#292931] hover:border-[#5a45ff]/40 text-white transition-all cursor-pointer"
+                  className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-[#1e1f26] border border-[#292931] hover:border-[#5a45ff]/40 text-white transition-all cursor-pointer"
                 >
                   <div className="flex items-center gap-2">
                     <CalendarIcon className="w-4 h-4 text-[#5a45ff]" />
@@ -791,15 +816,13 @@ export const App: React.FC = () => {
                 )}
               </section>
 
-              {/* =============================================================
-                  3. UPCOMING SECTION (Collapsed by default)
-                 ============================================================= */}
+              {/* 3. UPCOMING SECTION (Collapsed by default) */}
               {upcomingTasks.length > 0 && (
                 <section className="flex flex-col gap-2.5">
                   <button
                     type="button"
                     onClick={() => setUpcomingExpanded(!upcomingExpanded)}
-                    className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#1e1f26] border border-[#292931] hover:border-[#5a45ff]/40 text-[#c8c4d9] hover:text-white transition-all cursor-pointer"
+                    className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-[#1e1f26] border border-[#292931] hover:border-[#5a45ff]/40 text-[#c8c4d9] hover:text-white transition-all cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
                       <Clock className="w-4 h-4 text-[#00f5a0]" />
@@ -839,15 +862,13 @@ export const App: React.FC = () => {
                 </section>
               )}
 
-              {/* =============================================================
-                  4. COMPLETED SECTION (Collapsed by default)
-                 ============================================================= */}
+              {/* 4. COMPLETED SECTION (Collapsed by default) */}
               {completedTasks.length > 0 && (
                 <section className="flex flex-col gap-2.5">
                   <button
                     type="button"
                     onClick={() => setCompletedExpanded(!completedExpanded)}
-                    className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#1e1f26] border border-[#292931] hover:border-[#5a45ff]/40 text-[#918ea2] hover:text-white transition-all cursor-pointer"
+                    className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-[#1e1f26] border border-[#292931] hover:border-[#5a45ff]/40 text-[#918ea2] hover:text-white transition-all cursor-pointer"
                   >
                     <div className="flex items-center gap-2">
                       <CheckCircle className="w-4 h-4 text-[#00f5a0]" />
@@ -890,11 +911,10 @@ export const App: React.FC = () => {
           )}
         </div>
 
-        {/* Floating Add Task Button on Mobile */}
+        {/* Mobile Floating Add Task Button */}
         <button
           onClick={() => {
             setCreateSubtaskParent(currentParentTask);
-            setCreateDefaultSection('TODAY');
             setShowCreateModal(true);
           }}
           className="fixed bottom-6 right-6 md:hidden w-14 h-14 rounded-full bg-[#5a45ff] text-white flex items-center justify-center shadow-2xl shadow-[#5a45ff]/50 hover:bg-[#6e5aff] active:scale-95 transition-all z-30"
@@ -907,12 +927,11 @@ export const App: React.FC = () => {
       {/* =========================================================================
           MODALS & OVERLAYS
          ========================================================================= */}
-      {/* Create Task Modal */}
+      {/* Create Task Modal (Exact Android Match) */}
       <CreateTaskModal
         isOpen={showCreateModal}
         subtaskParent={createSubtaskParent}
         allTasks={tasks}
-        defaultSection={createDefaultSection}
         onClose={() => {
           setShowCreateModal(false);
           setCreateSubtaskParent(null);
@@ -988,6 +1007,22 @@ export const App: React.FC = () => {
         userName={session.name}
         onClose={() => setShowSettingsModal(false)}
         onLogout={handleLogout}
+      />
+
+      {/* Exact Android Filter Modal */}
+      <FilterModal
+        isOpen={showFilterModal}
+        initialFilter={filterCriteria}
+        onApplyFilter={(criteria) => setFilterCriteria(criteria)}
+        onClose={() => setShowFilterModal(false)}
+      />
+
+      {/* Exact Android Sort Modal */}
+      <SortModal
+        isOpen={showSortModal}
+        initialSort={sortOption}
+        onApplySort={(sort) => setSortOption(sort)}
+        onClose={() => setShowSortModal(false)}
       />
 
       {/* Undo Action Bar */}
