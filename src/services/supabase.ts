@@ -23,6 +23,7 @@ export const SupabaseService = {
       .from('tasks')
       .select('*')
       .eq('user_code', userCode)
+      .order('position', { ascending: true })
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -45,6 +46,19 @@ export const SupabaseService = {
     }
   },
 
+  async upsertTasks(tasks: Task[], userCode: string): Promise<void> {
+    if (tasks.length === 0) return;
+    const dtos = tasks.map((t) => toDto(t, userCode));
+    const { error } = await supabase.from('tasks').upsert(dtos, {
+      onConflict: 'id',
+    });
+
+    if (error) {
+      console.warn('Error batch upserting tasks in Supabase:', error);
+      throw error;
+    }
+  },
+
   async deleteTask(taskId: string, userCode: string): Promise<void> {
     const { error } = await supabase
       .from('tasks')
@@ -54,6 +68,20 @@ export const SupabaseService = {
 
     if (error) {
       console.warn('Error deleting task in Supabase:', error);
+      throw error;
+    }
+  },
+
+  async deleteTasks(taskIds: string[], userCode: string): Promise<void> {
+    if (taskIds.length === 0) return;
+    const { error } = await supabase
+      .from('tasks')
+      .delete()
+      .in('id', taskIds)
+      .eq('user_code', userCode);
+
+    if (error) {
+      console.warn('Error batch deleting tasks in Supabase:', error);
       throw error;
     }
   },

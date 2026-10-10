@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Key, ArrowRight, Infinity, AlertCircle, Sparkles, Smartphone } from 'lucide-react';
+import { Key, ArrowRight, Infinity, AlertCircle, Smartphone } from 'lucide-react';
 import { AuthManager, UserSession } from '../services/auth';
 
 interface LoginScreenProps {
@@ -27,20 +27,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       AuthManager.saveSession(session.code, session.name);
       onLoginSuccess(session);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Invalid access code. Please check and try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleGenerateCode = async () => {
-    setIsLoading(true);
-    setErrorMessage(null);
-    try {
-      const session = await AuthManager.registerNewAccessCode('Web User');
-      onLoginSuccess(session);
-    } catch (err: any) {
-      setErrorMessage('Failed to generate a new access code.');
+      setErrorMessage(
+        err.message || 'Access code not found in Kairo database. Please check your Android app.'
+      );
     } finally {
       setIsLoading(false);
     }
@@ -59,7 +48,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               Welcome to KAIRO
             </h1>
             <p className="text-xs text-[#918ea2] mt-1">
-              Connect to your live workspace to access your tasks
+              Connect with your Android workspace code to access all your live tasks
             </p>
           </div>
         </div>
@@ -77,7 +66,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           <div>
             <label className="block text-xs font-semibold text-[#c8c4d9] mb-1.5 flex items-center gap-1.5">
               <Key className="w-3.5 h-3.5 text-[#5a45ff]" />
-              Enter Your Access Code
+              Enter Your Workspace Access Code
             </label>
             <div className="relative">
               <input
@@ -89,47 +78,31 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   setAccessCode(e.target.value.toUpperCase());
                   setErrorMessage(null);
                 }}
-                placeholder="e.g. A3K9X2"
+                placeholder="e.g. SDANAS"
                 className="w-full bg-[#12131a] border border-[#292931] focus:border-[#5a45ff] rounded-xl px-4 py-3 text-base text-white tracking-widest font-mono text-center outline-none transition-all placeholder:text-[#474556]"
               />
             </div>
             <p className="text-[11px] text-[#918ea2] mt-2 flex items-center gap-1.5">
               <Smartphone className="w-3 h-3 text-[#00f5a0]" />
-              In the Kairo Android app, go to Settings to find your code.
+              Find this 6-character code in your Kairo Android app Settings screen.
             </p>
           </div>
 
           <button
             type="submit"
             disabled={isLoading || !accessCode.trim()}
-            className="w-full py-3 px-4 rounded-xl bg-[#5a45ff] hover:bg-[#6e5aff] disabled:opacity-40 disabled:hover:bg-[#5a45ff] text-white text-sm font-semibold shadow-lg shadow-[#5a45ff]/25 transition-all flex items-center justify-center gap-2 active:scale-95 cursor-pointer"
+            className="w-full py-3 px-4 rounded-xl bg-[#5a45ff] hover:bg-[#6e5aff] disabled:opacity-40 disabled:hover:bg-[#5a45ff] text-white text-sm font-semibold shadow-lg shadow-[#5a45ff]/25 transition-all flex items-center justify-center gap-2 active:scale-95 cursor-pointer mt-1"
           >
             {isLoading ? (
               <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
             ) : (
               <>
-                <span>Access Tasks</span>
+                <span>Connect Workspace</span>
                 <ArrowRight className="w-4 h-4" />
               </>
             )}
           </button>
         </form>
-
-        {/* Divider & Option to create new account */}
-        <div className="flex flex-col gap-3 pt-4 border-t border-[#292931]">
-          <div className="flex items-center justify-between text-xs text-[#918ea2]">
-            <span>Don't have a code yet?</span>
-            <button
-              type="button"
-              onClick={handleGenerateCode}
-              disabled={isLoading}
-              className="text-[#00f5a0] hover:underline font-medium flex items-center gap-1"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              Generate New Code
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );

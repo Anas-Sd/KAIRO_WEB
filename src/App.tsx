@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   CheckCircle,
   Calendar as CalendarIcon,
@@ -8,14 +8,14 @@ import {
   Plus,
   SlidersHorizontal,
   ArrowUpDown,
-  Download,
-  Flame,
   ListTodo,
-  TrendingUp,
   Infinity,
   Menu,
   ChevronDown,
   Clock,
+  LogOut,
+  AlertTriangle,
+  FolderTree,
 } from 'lucide-react';
 import { Task, Priority, TaskSection, TaskSort } from './types/task';
 import { SupabaseService } from './services/supabase';
@@ -36,14 +36,13 @@ export const App: React.FC = () => {
   const [session, setSession] = useState<UserSession | null>(() => AuthManager.getSession());
   const userCode = session?.code || '';
 
-  // App State
+  // App Data & Loading States
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'tasks' | 'lists' | 'habits' | 'calendar' | 'analytics'>('tasks');
 
-  // Hierarchy Navigation
+  // Hierarchy Navigation (Android Breadcrumb Stack)
   const [breadcrumbStack, setBreadcrumbStack] = useState<Task[]>([]);
 
   // Search, Filter & Sort
@@ -53,13 +52,13 @@ export const App: React.FC = () => {
   const [showFilterDropdown, setShowFilterDropdown] = useState<boolean>(false);
   const [showSortDropdown, setShowSortDropdown] = useState<boolean>(false);
 
-  // Accordion Section States (Default: Overdue & Today expanded, rest collapsed)
+  // Section Accordion States (Overdue & Today expanded by default, rest collapsed)
   const [overdueExpanded, setOverdueExpanded] = useState<boolean>(true);
   const [todayExpanded, setTodayExpanded] = useState<boolean>(true);
   const [upcomingExpanded, setUpcomingExpanded] = useState<boolean>(false);
   const [completedExpanded, setCompletedExpanded] = useState<boolean>(false);
 
-  // Modals & Overlays
+  // Modals & Sheets
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [createSubtaskParent, setCreateSubtaskParent] = useState<Task | null>(null);
   const [createDefaultSection, setCreateDefaultSection] = useState<TaskSection>('TODAY');
@@ -70,64 +69,68 @@ export const App: React.FC = () => {
   const [selectedTaskForDelete, setSelectedTaskForDelete] = useState<Task | null>(null);
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
 
-  // Undo state
+  // Undo Snack State
   const [undoTask, setUndoTask] = useState<{ id: string; title: string; previousCompleted: boolean } | null>(null);
 
-  // Toast
+  // Toast State
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
     setTimeout(() => {
       setToastMessage((prev) => (prev === msg ? null : prev));
     }, 3000);
-  };
+  }, []);
 
   /* --------------------------------------------------------------------------
-     Data Loading & Supabase Realtime Synchronization
+     Fetch Tasks & Supabase Realtime Subscription
      -------------------------------------------------------------------------- */
-  const loadTasksFromSupabase = async (code = userCode) => {
+  const loadTasksFromSupabase = useCallback(async (code: string) => {
     if (!code) return;
     setIsSyncing(true);
     try {
       const data = await SupabaseService.fetchTasks(code);
       setTasks(data);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load from Supabase:', err);
-      showToast('Could not reach cloud database. Check connection.');
+      showToast('Error syncing with database. Check network.');
     } finally {
       setIsLoading(false);
       setIsSyncing(false);
     }
-  };
+  }, [showToast]);
 
   useEffect(() => {
-    if (!userCode) return;
+    if (!userCode) {
+      setIsLoading(false);
+      return;
+    }
 
+    // Load initial tasks
     loadTasksFromSupabase(userCode);
 
-    // Subscribe to real-time changes directly in Supabase
-    const subscription = SupabaseService.subscribeToTasks(userCode, () => {
+    // Subscribe to live realtime changes from Android or other web sessions
+    const channel = SupabaseService.subscribeToTasks(userCode, () => {
       loadTasksFromSupabase(userCode);
     });
 
     return () => {
-      subscription.unsubscribe();
+      channel.unsubscribe();
     };
-  }, [userCode]);
+  }, [userCode, loadTasksFromSupabase]);
 
   /* --------------------------------------------------------------------------
-     Hierarchy Scoping & Filter/Sort Logic
+     Hierarchy Scoping & Filter / Sort Engine
      -------------------------------------------------------------------------- */
   const scopedTasks = useMemo(() => {
     const isSearching = searchQuery.trim().length > 0;
 
     if (breadcrumbStack.length > 0) {
-      // Drilled into a parent task: show its direct subtasks
+      // Drilled into parent: show direct children of the active parent
       const currentParent = breadcrumbStack[breadcrumbStack.length - 1];
       return tasks.filter((t) => t.parentId === currentParent.id);
     } else if (isSearching) {
-      // Show all matching tasks across hierarchy when actively searching
+      // Searching globally across all tasks
       return tasks;
     } else {
       // Root workspace: show only top-level tasks
@@ -143,7 +146,7 @@ export const App: React.FC = () => {
       result = result.filter((t) => t.priority === priorityFilter.toUpperCase());
     }
 
-    // Text search filter
+    // Text search
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       result = result.filter(
@@ -154,7 +157,7 @@ export const App: React.FC = () => {
       );
     }
 
-    // Sort order
+    // Sorting
     result.sort((a, b) => {
       if (sortOption === 'PRIORITY_HIGH') {
         const order: Record<Priority, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
@@ -183,7 +186,7 @@ export const App: React.FC = () => {
   /* --------------------------------------------------------------------------
      Android Dynamic Section Categorization (Exact Match to TaskViewModel.kt)
      -------------------------------------------------------------------------- */
-  const isOverdue = (task: Task): boolean => {
+  const isOverdue = useCallback((task: Task): boolean => {
     if (task.isCompleted) return false;
     if (task.dueDate && task.dueDate.toLowerCase().includes('yesterday')) return true;
     if (task.section === 'OVERDUE') return true;
@@ -196,9 +199,9 @@ export const App: React.FC = () => {
       }
     }
     return false;
-  };
+  }, []);
 
-  const isToday = (task: Task): boolean => {
+  const isToday = useCallback((task: Task): boolean => {
     if (task.isCompleted) return false;
     if (isOverdue(task)) return false;
     if (task.dueDate && task.dueDate.toLowerCase().includes('today')) return true;
@@ -211,34 +214,22 @@ export const App: React.FC = () => {
       return task.dueDateMillis >= todayStart.getTime() && task.dueDateMillis < todayEnd;
     }
     return false;
-  };
+  }, [isOverdue]);
 
-  const isUpcoming = (task: Task): boolean => {
+  const isUpcoming = useCallback((task: Task): boolean => {
     if (task.isCompleted) return false;
     if (isOverdue(task)) return false;
     if (isToday(task)) return false;
     return true;
-  };
+  }, [isOverdue, isToday]);
 
-  const overdueTasks = useMemo(
-    () => filteredTasks.filter((t) => isOverdue(t)),
-    [filteredTasks]
-  );
-  const todayTasks = useMemo(
-    () => filteredTasks.filter((t) => isToday(t)),
-    [filteredTasks]
-  );
-  const upcomingTasks = useMemo(
-    () => filteredTasks.filter((t) => isUpcoming(t)),
-    [filteredTasks]
-  );
-  const completedTasks = useMemo(
-    () => filteredTasks.filter((t) => t.isCompleted),
-    [filteredTasks]
-  );
+  const overdueTasks = useMemo(() => filteredTasks.filter((t) => isOverdue(t)), [filteredTasks, isOverdue]);
+  const todayTasks = useMemo(() => filteredTasks.filter((t) => isToday(t)), [filteredTasks, isToday]);
+  const upcomingTasks = useMemo(() => filteredTasks.filter((t) => isUpcoming(t)), [filteredTasks, isUpcoming]);
+  const completedTasks = useMemo(() => filteredTasks.filter((t) => t.isCompleted), [filteredTasks]);
 
   /* --------------------------------------------------------------------------
-     Task Operations (CRUD with direct Supabase sync)
+     Task CRUD Operations (Direct Supabase Sync)
      -------------------------------------------------------------------------- */
   const handleToggleCompletion = async (taskId: string) => {
     const task = tasks.find((t) => t.id === taskId);
@@ -256,7 +247,7 @@ export const App: React.FC = () => {
     // Optimistic UI update
     setTasks((prev) => prev.map((t) => (t.id === taskId ? updated : t)));
 
-    // Set undo action
+    // Undo action
     setUndoTask({
       id: task.id,
       title: task.title,
@@ -265,7 +256,7 @@ export const App: React.FC = () => {
 
     try {
       await SupabaseService.upsertTask(updated, userCode);
-      showToast(updated.isCompleted ? 'Task marked complete 🎉' : 'Task marked active');
+      showToast(updated.isCompleted ? 'Task completed' : 'Task marked active');
     } catch (err) {
       console.error('Supabase update failed:', err);
       showToast('Error syncing completion to Supabase');
@@ -297,8 +288,10 @@ export const App: React.FC = () => {
   };
 
   const handleCreateTask = async (taskData: Partial<Task>) => {
+    // Generate standard UUID v4 matching Supabase UUID column
+    const taskId = crypto.randomUUID();
     const newTask: Task = {
-      id: 'task-' + Date.now() + '-' + Math.random().toString(36).substr(2, 4),
+      id: taskId,
       title: taskData.title || '',
       notes: taskData.notes || null,
       priority: taskData.priority || 'MEDIUM',
@@ -324,7 +317,7 @@ export const App: React.FC = () => {
       await SupabaseService.upsertTask(newTask, userCode);
     } catch (err) {
       console.error('Supabase create failed:', err);
-      showToast('Error saving to cloud');
+      showToast('Error saving task to cloud');
     }
   };
 
@@ -341,193 +334,80 @@ export const App: React.FC = () => {
   };
 
   const handleDeleteTask = async (task: Task) => {
-    const toDeleteIds = new Set<string>([task.id]);
+    // Collect all recursive descendant IDs
+    const toDeleteIds: string[] = [task.id];
     const queue = [task.id];
     while (queue.length > 0) {
       const current = queue.pop()!;
       const children = tasks.filter((t) => t.parentId === current);
       children.forEach((c) => {
-        toDeleteIds.add(c.id);
+        toDeleteIds.push(c.id);
         queue.push(c.id);
       });
     }
 
-    setTasks((prev) => prev.filter((t) => !toDeleteIds.has(t.id)));
-    showToast('Task deleted');
+    const toDeleteSet = new Set(toDeleteIds);
+    setTasks((prev) => prev.filter((t) => !toDeleteSet.has(t.id)));
+    showToast(`Deleted task${toDeleteIds.length > 1 ? ` and ${toDeleteIds.length - 1} subtasks` : ''}`);
 
     try {
-      for (const id of toDeleteIds) {
-        await SupabaseService.deleteTask(id, userCode);
-      }
+      await SupabaseService.deleteTasks(toDeleteIds, userCode);
     } catch (err) {
       console.error('Supabase delete failed:', err);
-      showToast('Error removing from cloud');
+      showToast('Error deleting task in cloud');
     }
   };
 
-  const handleAdjustParent = async (newParentId: string | null, moveSubtasks: boolean) => {
+  const handleAdjustParent = async (newParentId: string | null, _moveSubtasks: boolean) => {
     if (!selectedTaskForAdjustParent) return;
 
-    const task = selectedTaskForAdjustParent;
-    const updatedTask: Task = {
-      ...task,
+    const updated: Task = {
+      ...selectedTaskForAdjustParent,
       parentId: newParentId,
       updatedAt: Date.now(),
     };
 
-    setTasks((prev) => prev.map((t) => (t.id === task.id ? updatedTask : t)));
-    showToast(newParentId ? 'Task moved to new parent' : 'Task moved to top-level');
+    setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+    setSelectedTaskForAdjustParent(null);
+    showToast('Task moved');
 
     try {
-      await SupabaseService.upsertTask(updatedTask, userCode);
+      await SupabaseService.upsertTask(updated, userCode);
     } catch (err) {
       console.error('Supabase reparent failed:', err);
+      showToast('Error saving change to cloud');
     }
-  };
-
-  const handleRescheduleAllOverdue = async () => {
-    const overdue = tasks.filter((t) => isOverdue(t));
-    if (overdue.length === 0) {
-      showToast('No overdue tasks to reschedule');
-      return;
-    }
-
-    const updatedList = overdue.map((t) => ({
-      ...t,
-      section: 'TODAY' as TaskSection,
-      dueDate: 'Today',
-      dueDateMillis: Date.now(),
-      updatedAt: Date.now(),
-    }));
-
-    setTasks((prev) =>
-      prev.map((t) => {
-        const found = updatedList.find((u) => u.id === t.id);
-        return found || t;
-      })
-    );
-
-    showToast(`Rescheduled ${overdue.length} overdue tasks to Today`);
-
-    try {
-      for (const t of updatedList) {
-        await SupabaseService.upsertTask(t, userCode);
-      }
-    } catch (err) {
-      console.error('Failed to reschedule overdue on cloud:', err);
-    }
-  };
-
-  const handleClearCompleted = async () => {
-    const completed = tasks.filter((t) => t.isCompleted);
-    if (completed.length === 0) {
-      showToast('No completed tasks to clear');
-      return;
-    }
-
-    setTasks((prev) => prev.filter((t) => !t.isCompleted));
-    showToast('Cleared completed tasks');
-
-    try {
-      for (const t of completed) {
-        await SupabaseService.deleteTask(t.id, userCode);
-      }
-    } catch (err) {
-      console.error('Failed to clear completed on cloud:', err);
-    }
-  };
-
-  const handleExportCsv = () => {
-    const rows = [
-      ['ID', 'Title', 'Notes', 'Priority', 'Section', 'DueDate', 'DueTime', 'Location', 'IsCompleted', 'ParentID'],
-    ];
-
-    tasks.forEach((t) => {
-      rows.push([
-        t.id,
-        `"${(t.title || '').replace(/"/g, '""')}"`,
-        `"${(t.notes || '').replace(/"/g, '""')}"`,
-        t.priority,
-        t.section,
-        t.dueDate,
-        t.dueTime || '',
-        t.location || '',
-        t.isCompleted ? 'true' : 'false',
-        t.parentId || '',
-      ]);
-    });
-
-    const csvContent = 'data:text/csv;charset=utf-8,' + rows.map((e) => e.join(',')).join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `kairo_tasks_${userCode}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    showToast('Exported tasks to CSV');
   };
 
   /* --------------------------------------------------------------------------
-     Hierarchy Drill-Down Navigation
+     Navigation & Hierarchy
      -------------------------------------------------------------------------- */
   const handleDrillDown = (task: Task) => {
     setBreadcrumbStack((prev) => [...prev, task]);
   };
 
-  const handlePopBreadcrumb = () => {
-    setBreadcrumbStack((prev) => prev.slice(0, prev.length - 1));
+  const handleNavigateBack = () => {
+    setBreadcrumbStack((prev) => prev.slice(0, -1));
   };
 
   const handleNavigateToCrumb = (index: number) => {
-    if (index < 0) {
+    if (index === -1) {
       setBreadcrumbStack([]);
     } else {
       setBreadcrumbStack((prev) => prev.slice(0, index + 1));
     }
   };
 
-  /* --------------------------------------------------------------------------
-     Logout Handler
-     -------------------------------------------------------------------------- */
   const handleLogout = () => {
     AuthManager.clearSession();
     setSession(null);
     setTasks([]);
     setBreadcrumbStack([]);
-    showToast('Logged out of workspace');
+    setShowSettingsModal(false);
   };
 
   /* --------------------------------------------------------------------------
-     Keyboard Shortcuts
-     -------------------------------------------------------------------------- */
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        const input = document.getElementById('globalSearchInput');
-        if (input) input.focus();
-      }
-      if (
-        e.key.toLowerCase() === 'n' &&
-        !['INPUT', 'TEXTAREA', 'SELECT'].includes((document.activeElement as HTMLElement)?.tagName)
-      ) {
-        e.preventDefault();
-        setCreateSubtaskParent(
-          breadcrumbStack.length > 0 ? breadcrumbStack[breadcrumbStack.length - 1] : null
-        );
-        setCreateDefaultSection('TODAY');
-        setShowCreateModal(true);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [breadcrumbStack]);
-
-  /* --------------------------------------------------------------------------
-     If user is NOT logged in, show Login Screen (Exact mobile authentication flow)
+     Render Login Screen if No Session
      -------------------------------------------------------------------------- */
   if (!session) {
     return (
@@ -539,681 +419,487 @@ export const App: React.FC = () => {
     );
   }
 
+  const currentParentTask = breadcrumbStack.length > 0 ? breadcrumbStack[breadcrumbStack.length - 1] : null;
+
   return (
     <div className="flex w-full min-h-screen bg-[#12131a] text-[#e3e1ec]">
       {/* =========================================================================
-          DESKTOP COLLAPSIBLE SIDEBAR
+          DESKTOP SIDEBAR
          ========================================================================= */}
       <aside
-        id="sidebar"
         className={`fixed left-0 top-0 h-screen ${
-          sidebarCollapsed ? 'w-16 sidebar-collapsed' : 'w-64'
-        } bg-[#1a1b22] border-r border-[#292931] z-50 flex flex-col justify-between p-4 shadow-xl`}
+          sidebarCollapsed ? 'w-16' : 'w-64'
+        } bg-[#1a1b22] border-r border-[#292931] z-40 flex flex-col justify-between p-4 shadow-xl transition-all duration-200 hidden md:flex`}
       >
         <div className="flex flex-col gap-6">
-          {/* Logo Branding & Collapse Action */}
-          <div className="flex items-center justify-between px-2 pt-1 relative">
-            <div
-              className="flex items-center gap-3 overflow-hidden cursor-pointer"
-              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            >
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#5a45ff] to-[#00f5a0] flex items-center justify-center flex-shrink-0 shadow-lg shadow-[#5a45ff]/20 active:scale-95 transition-transform">
+          {/* Logo Branding */}
+          <div className="flex items-center justify-between px-2 pt-1">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#5a45ff] to-[#00f5a0] flex items-center justify-center shadow-lg shadow-[#5a45ff]/20 flex-shrink-0">
                 <Infinity className="w-5 h-5 text-white" />
               </div>
-              <span className="sidebar-text font-bold text-xl tracking-wider text-white font-display">
-                KAIRO
-              </span>
+              {!sidebarCollapsed && (
+                <div className="flex flex-col">
+                  <h1 className="font-display font-bold text-base tracking-wider text-white">KAIRO</h1>
+                  <span className="text-[10px] text-[#918ea2] uppercase tracking-wider font-mono">
+                    {userCode}
+                  </span>
+                </div>
+              )}
             </div>
             <button
               onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              className="p-1.5 rounded-lg hover:bg-[#292931] text-[#918ea2] hover:text-[#e3e1ec] transition-all flex items-center justify-center active:scale-90"
-              title="Toggle Sidebar"
+              className="p-1 rounded-lg text-[#918ea2] hover:text-white hover:bg-[#292931] transition-colors"
+              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             >
-              <Menu className="w-5 h-5" />
+              <Menu className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Navigation Links */}
-          <nav className="flex flex-col gap-1.5">
+          {/* Navigation Items */}
+          <nav className="flex flex-col gap-1">
             <button
-              onClick={() => setActiveTab('tasks')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                activeTab === 'tasks'
-                  ? 'bg-[#5a45ff] text-white shadow-md shadow-[#5a45ff]/25'
-                  : 'text-[#c8c4d9] hover:text-white hover:bg-[#292931]'
-              }`}
-              data-tooltip="Tasks"
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold bg-[#5a45ff]/15 text-[#c5c0ff] border border-[#5a45ff]/30 shadow-sm transition-all`}
             >
-              <CheckCircle className="w-5 h-5 flex-shrink-0" />
-              <span className="sidebar-text truncate">Tasks</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('lists')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                activeTab === 'lists'
-                  ? 'bg-[#5a45ff] text-white shadow-md shadow-[#5a45ff]/25'
-                  : 'text-[#c8c4d9] hover:text-white hover:bg-[#292931]'
-              }`}
-              data-tooltip="Lists"
-            >
-              <ListTodo className="w-5 h-5 flex-shrink-0" />
-              <span className="sidebar-text truncate">Lists</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('habits')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                activeTab === 'habits'
-                  ? 'bg-[#5a45ff] text-white shadow-md shadow-[#5a45ff]/25'
-                  : 'text-[#c8c4d9] hover:text-white hover:bg-[#292931]'
-              }`}
-              data-tooltip="Habits"
-            >
-              <Flame className="w-5 h-5 flex-shrink-0" />
-              <span className="sidebar-text truncate">Habits</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('calendar')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                activeTab === 'calendar'
-                  ? 'bg-[#5a45ff] text-white shadow-md shadow-[#5a45ff]/25'
-                  : 'text-[#c8c4d9] hover:text-white hover:bg-[#292931]'
-              }`}
-              data-tooltip="Calendar"
-            >
-              <CalendarIcon className="w-5 h-5 flex-shrink-0" />
-              <span className="sidebar-text truncate">Calendar</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('analytics')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                activeTab === 'analytics'
-                  ? 'bg-[#5a45ff] text-white shadow-md shadow-[#5a45ff]/25'
-                  : 'text-[#c8c4d9] hover:text-white hover:bg-[#292931]'
-              }`}
-              data-tooltip="Analytics"
-            >
-              <TrendingUp className="w-5 h-5 flex-shrink-0" />
-              <span className="sidebar-text truncate">Analytics</span>
+              <ListTodo className="w-4 h-4 text-[#5a45ff] flex-shrink-0" />
+              {!sidebarCollapsed && <span>Tasks</span>}
+              {!sidebarCollapsed && tasks.length > 0 && (
+                <span className="ml-auto bg-[#5a45ff]/30 text-white text-[10px] font-mono px-2 py-0.5 rounded-full">
+                  {tasks.filter((t) => !t.isCompleted).length}
+                </span>
+              )}
             </button>
           </nav>
         </div>
 
-        {/* Sidebar Bottom: Settings & Supabase Status */}
-        <div className="flex flex-col gap-2 border-t border-[#292931] pt-4">
+        {/* Sidebar Footer with Workspace info and Logout */}
+        <div className="flex flex-col gap-2 pt-4 border-t border-[#292931]">
           <button
             onClick={() => setShowSettingsModal(true)}
-            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-[#c8c4d9] hover:text-white hover:bg-[#292931] text-sm font-medium transition-colors"
-            data-tooltip="Settings"
+            className="flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium text-[#c8c4d9] hover:bg-[#292931] hover:text-white transition-colors"
+            title="Settings & Workspace"
           >
-            <Settings className="w-5 h-5 flex-shrink-0" />
-            <span className="sidebar-text truncate">Settings</span>
+            <Settings className="w-4 h-4 flex-shrink-0" />
+            {!sidebarCollapsed && <span>Settings</span>}
           </button>
 
-          {!sidebarCollapsed && (
-            <div className="flex items-center justify-between px-3 py-2 text-xs text-[#918ea2]">
-              <div
-                className="flex items-center gap-2 cursor-pointer hover:text-white"
-                onClick={() => loadTasksFromSupabase()}
-                title="Click to sync with Supabase"
-              >
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    isSyncing ? 'bg-amber-400 animate-spin' : 'bg-[#00f5a0] animate-pulse'
-                  }`}
-                />
-                <span className="font-medium text-[#c8c4d9]">
-                  {isSyncing ? 'Syncing...' : 'Supabase Live'}
-                </span>
-              </div>
-              <span className="font-mono text-[10px] bg-[#292931] px-1.5 py-0.5 rounded text-[#918ea2]">
-                {userCode}
-              </span>
-            </div>
-          )}
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-medium text-[#ffb4ab] hover:bg-[#93000a]/20 transition-colors"
+            title="Log Out"
+          >
+            <LogOut className="w-4 h-4 flex-shrink-0" />
+            {!sidebarCollapsed && <span>Log Out</span>}
+          </button>
         </div>
       </aside>
 
       {/* =========================================================================
-          MAIN LAYOUT CONTAINER
+          MAIN WORKSPACE CONTENT
          ========================================================================= */}
-      <div
-        id="mainLayout"
-        className={`flex-1 flex flex-col min-w-0 ${
-          sidebarCollapsed ? 'pl-16' : 'pl-64'
-        } transition-all duration-300`}
+      <main
+        className={`flex-1 min-h-screen ${
+          sidebarCollapsed ? 'md:ml-16' : 'md:ml-64'
+        } flex flex-col transition-all duration-200`}
       >
-        {/* Top Header */}
-        <header className="sticky top-0 z-40 h-16 w-full bg-[#12131a]/90 backdrop-blur-md border-b border-[#292931] flex items-center justify-between px-6 transition-colors duration-200">
-          {/* Global Search Bar */}
-          <div className="flex items-center gap-3 w-full max-w-md">
-            <div className="search-wrapper flex items-center gap-2.5 w-full bg-[#1a1b22] border border-[#292931] hover:border-[#474556] transition-all px-3.5 py-2 rounded-xl text-[#c8c4d9]">
-              <Search className="w-4 h-4 text-[#918ea2]" />
-              <input
-                id="globalSearchInput"
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search tasks, notes, subtasks, locations..."
-                className="bg-transparent border-0 outline-none w-full text-sm text-[#e3e1ec] placeholder:text-[#918ea2] p-0 focus:ring-0"
-              />
-              <kbd className="px-2 py-0.5 rounded bg-[#292931] border border-[#33343c] text-[#c8c4d9] text-[11px] font-semibold tracking-wide flex-shrink-0">
-                ⌘K
-              </kbd>
+        {/* Top Header Bar */}
+        <header className="sticky top-0 z-30 bg-[#12131a]/95 backdrop-blur border-b border-[#292931] px-6 py-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <h2 className="text-lg font-bold font-display text-white tracking-tight truncate">
+              {currentParentTask ? currentParentTask.title : 'Tasks'}
+            </h2>
+
+            {/* Active Workspace Code Pill */}
+            <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#1a1b22] border border-[#292931] text-[11px] text-[#c8c4d9]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#00f5a0]" />
+              <span className="font-mono text-white font-medium">{userCode}</span>
             </div>
+
+            {/* Syncing indicator */}
+            {isSyncing && (
+              <div className="flex items-center gap-1 text-[11px] text-[#918ea2]">
+                <RefreshCw className="w-3 h-3 animate-spin text-[#5a45ff]" />
+                <span className="hidden sm:inline">Syncing...</span>
+              </div>
+            )}
           </div>
 
-          {/* Header Actions */}
-          <div className="flex items-center gap-3">
+          {/* Action Bar */}
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => loadTasksFromSupabase()}
-              className="p-2 rounded-xl bg-[#1a1b22] border border-[#292931] hover:border-[#474556] text-[#c8c4d9] hover:text-white transition-all active:scale-95 flex items-center justify-center"
-              title="Sync with Supabase"
+              onClick={() => loadTasksFromSupabase(userCode)}
+              disabled={isSyncing}
+              className="p-2 rounded-xl bg-[#1a1b22] border border-[#292931] hover:bg-[#292931] text-[#c8c4d9] hover:text-white transition-all disabled:opacity-50"
+              title="Refresh tasks from Supabase"
             >
-              <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin text-[#00f5a0]' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
             </button>
 
-            <div
+            <button
               onClick={() => setShowSettingsModal(true)}
-              className="flex items-center gap-2.5 pl-1 cursor-pointer"
-              title={`Logged in as: ${userCode} (${session.name})`}
+              className="p-2 rounded-xl bg-[#1a1b22] border border-[#292931] hover:bg-[#292931] text-[#c8c4d9] hover:text-white transition-all"
+              title="Settings"
             >
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#5a45ff] to-[#00f5a0] text-white font-bold flex items-center justify-center text-xs ring-2 ring-[#292931] hover:ring-[#5a45ff]/60 transition-all active:scale-95 shadow-inner">
-                {userCode.slice(0, 2).toUpperCase()}
-              </div>
-            </div>
+              <Settings className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={() => {
+                setCreateSubtaskParent(currentParentTask);
+                setCreateDefaultSection('TODAY');
+                setShowCreateModal(true);
+              }}
+              className="px-4 py-2 rounded-xl bg-[#5a45ff] hover:bg-[#6e5aff] text-white text-xs font-semibold shadow-md shadow-[#5a45ff]/25 transition-all flex items-center gap-1.5 active:scale-95"
+            >
+              <Plus className="w-4 h-4" />
+              <span>{currentParentTask ? 'Add Subtask' : 'Add Task'}</span>
+            </button>
           </div>
         </header>
 
-        {/* =========================================================================
-            WORKSPACE CONTENT
-           ========================================================================= */}
-        {activeTab === 'tasks' ? (
-          <main className="flex-1 p-6 md:p-8 max-w-7xl w-full mx-auto flex flex-col gap-6">
-            {/* View Header & Toolbar */}
-            <div className="flex flex-col gap-4 animate-entrance">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <h1 className="text-3xl font-bold tracking-tight text-white font-display">
-                    {breadcrumbStack.length > 0
-                      ? breadcrumbStack[breadcrumbStack.length - 1].title
-                      : 'Tasks'}
-                  </h1>
-                  <div className="flex items-center gap-2 bg-[#1a1b22] border border-[#292931] px-3 py-1 rounded-full text-xs font-medium text-[#c8c4d9] w-fit shadow-inner">
-                    <span className="w-2 h-2 rounded-full bg-[#00f5a0]" />
-                    <span>
-                      {tasks.length} total • {tasks.filter((t) => t.isCompleted).length} completed
-                    </span>
-                  </div>
-                </div>
+        {/* Content Body */}
+        <div className="flex-1 px-4 sm:px-6 py-6 max-w-5xl w-full mx-auto flex flex-col gap-5">
+          {/* Breadcrumb Bar when drilled down */}
+          {breadcrumbStack.length > 0 && (
+            <BreadcrumbBar
+              breadcrumbStack={breadcrumbStack}
+              onNavigateBack={handleNavigateBack}
+              onNavigateToCrumb={handleNavigateToCrumb}
+            />
+          )}
 
-                {/* Action Toolbar */}
-                <div className="flex flex-wrap items-center gap-2.5">
-                  {/* Priority Filter */}
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setShowFilterDropdown(!showFilterDropdown)}
-                      className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#1a1b22] border border-[#292931] hover:border-[#474556] text-[#e3e1ec] text-xs font-medium transition-all shadow-sm active:scale-95"
-                    >
-                      <SlidersHorizontal className="w-4 h-4 text-[#918ea2]" />
-                      <span>Priority:</span>
-                      <span className="bg-[#292931] text-[#00f5a0] px-1.5 py-0.5 rounded text-[10px] font-semibold">
-                        {priorityFilter}
-                      </span>
-                    </button>
-
-                    {showFilterDropdown && (
-                      <>
-                        <div
-                          className="fixed inset-0 z-30"
-                          onClick={() => setShowFilterDropdown(false)}
-                        />
-                        <div className="absolute right-0 mt-2 w-44 bg-[#1a1b22] border border-[#292931] rounded-xl p-1.5 shadow-2xl z-40 flex flex-col gap-1 animate-entrance">
-                          {['All', 'Urgent', 'High', 'Medium', 'Low'].map((p) => (
-                            <button
-                              key={p}
-                              onClick={() => {
-                                setPriorityFilter(p);
-                                setShowFilterDropdown(false);
-                              }}
-                              className={`w-full text-left px-3 py-2 text-xs rounded-lg transition-colors flex items-center justify-between ${
-                                priorityFilter === p
-                                  ? 'bg-[#292931] text-white font-medium'
-                                  : 'text-[#c8c4d9] hover:bg-[#292931]'
-                              }`}
-                            >
-                              <span>{p === 'All' ? 'All Priorities' : p}</span>
-                              {priorityFilter === p && (
-                                <CheckCircle className="w-3.5 h-3.5 text-[#00f5a0]" />
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Sort Dropdown */}
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setShowSortDropdown(!showSortDropdown)}
-                      className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#1a1b22] border border-[#292931] hover:border-[#474556] text-[#e3e1ec] text-xs font-medium transition-all shadow-sm active:scale-95"
-                    >
-                      <ArrowUpDown className="w-4 h-4 text-[#918ea2]" />
-                      <span>
-                        Sort:{' '}
-                        {sortOption === 'DATE_NEAR'
-                          ? 'Due Date'
-                          : sortOption === 'PRIORITY_HIGH'
-                          ? 'Priority (High)'
-                          : sortOption === 'TITLE_AZ'
-                          ? 'Title (A-Z)'
-                          : 'Custom'}
-                      </span>
-                      <ChevronDown className="w-3.5 h-3.5 text-[#918ea2]" />
-                    </button>
-
-                    {showSortDropdown && (
-                      <>
-                        <div
-                          className="fixed inset-0 z-30"
-                          onClick={() => setShowSortDropdown(false)}
-                        />
-                        <div className="absolute right-0 mt-2 w-48 bg-[#1a1b22] border border-[#292931] rounded-xl p-1.5 shadow-2xl z-40 flex flex-col gap-1 animate-entrance">
-                          <button
-                            onClick={() => {
-                              setSortOption('DATE_NEAR');
-                              setShowSortDropdown(false);
-                            }}
-                            className="w-full text-left px-3 py-2 text-xs rounded-lg text-white hover:bg-[#292931]"
-                          >
-                            Due Date (Earliest first)
-                          </button>
-                          <button
-                            onClick={() => {
-                              setSortOption('PRIORITY_HIGH');
-                              setShowSortDropdown(false);
-                            }}
-                            className="w-full text-left px-3 py-2 text-xs rounded-lg text-[#c8c4d9] hover:bg-[#292931]"
-                          >
-                            Priority (Highest first)
-                          </button>
-                          <button
-                            onClick={() => {
-                              setSortOption('TITLE_AZ');
-                              setShowSortDropdown(false);
-                            }}
-                            className="w-full text-left px-3 py-2 text-xs rounded-lg text-[#c8c4d9] hover:bg-[#292931]"
-                          >
-                            Title (Alphabetical)
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Export CSV */}
-                  <button
-                    onClick={handleExportCsv}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#1a1b22] border border-[#292931] hover:border-[#474556] text-[#c8c4d9] hover:text-white text-xs font-medium transition-all shadow-sm active:scale-95"
-                    title="Export tasks to CSV"
-                  >
-                    <Download className="w-4 h-4" />
-                    <span className="hidden sm:inline">Export</span>
-                  </button>
-
-                  {/* Primary New Task Button */}
-                  <button
-                    onClick={() => {
-                      setCreateSubtaskParent(
-                        breadcrumbStack.length > 0 ? breadcrumbStack[breadcrumbStack.length - 1] : null
-                      );
-                      setCreateDefaultSection('TODAY');
-                      setShowCreateModal(true);
-                    }}
-                    className="btn-ripple flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#5a45ff] hover:bg-[#6e5aff] text-white text-xs font-semibold shadow-md shadow-[#5a45ff]/25 transition-all"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>{breadcrumbStack.length > 0 ? 'Add Subtask' : 'New Task'}</span>
-                    <kbd className="hidden sm:inline-block ml-1 bg-white/20 text-white text-[10px] px-1.5 py-0.2 rounded font-mono font-medium">
-                      N
-                    </kbd>
-                  </button>
-                </div>
-              </div>
-
-              {/* Subtask Breadcrumbs Bar */}
-              <BreadcrumbBar
-                breadcrumbStack={breadcrumbStack}
-                onNavigateBack={handlePopBreadcrumb}
-                onNavigateToCrumb={handleNavigateToCrumb}
+          {/* Search, Filter & Sort Controls */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-[#1a1b22] border border-[#292931] rounded-2xl p-3">
+            {/* Search Input */}
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-[#918ea2] absolute left-3 top-2.5" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search tasks, notes, locations..."
+                className="w-full bg-[#12131a] border border-[#292931] rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder:text-[#918ea2] focus:border-[#5a45ff] outline-none transition-all"
               />
             </div>
 
-            {/* =====================================================================
-                TASK SECTIONS (By default: Overdue & Today expanded, rest collapsed)
-               ===================================================================== */}
-            <div className="flex flex-col gap-5">
-              {/* SECTION 1: Overdue (EXPANDED BY DEFAULT) */}
-              <section className="bg-[#1a1b22] border border-[#292931] rounded-2xl p-4 md:p-5 shadow-lg transition-all">
-                <div
-                  className="flex items-center justify-between cursor-pointer select-none py-1 group"
-                  onClick={() => setOverdueExpanded(!overdueExpanded)}
+            {/* Filter & Sort Dropdowns */}
+            <div className="flex items-center gap-2 self-end sm:self-auto">
+              {/* Priority Filter */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowFilterDropdown(!showFilterDropdown);
+                    setShowSortDropdown(false);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-medium transition-all ${
+                    priorityFilter !== 'All'
+                      ? 'bg-[#5a45ff]/20 border-[#5a45ff] text-[#c5c0ff]'
+                      : 'bg-[#12131a] border-[#292931] text-[#c8c4d9] hover:bg-[#292931]'
+                  }`}
                 >
-                  <div className="flex items-center gap-3">
-                    <ChevronDown
-                      className={`w-5 h-5 text-[#ffb4ab] transition-transform duration-300 ${
-                        overdueExpanded ? 'rotate-0' : '-rotate-90'
-                      }`}
-                    />
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full bg-[#ffb4ab] animate-ping" />
-                      <h2 className="text-base font-semibold text-white tracking-wide">Overdue</h2>
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-[#5a45ff]" />
+                  <span>{priorityFilter === 'All' ? 'Priority' : priorityFilter}</span>
+                  <ChevronDown className="w-3 h-3 text-[#918ea2]" />
+                </button>
+
+                {showFilterDropdown && (
+                  <>
+                    <div className="fixed inset-0 z-30" onClick={() => setShowFilterDropdown(false)} />
+                    <div className="absolute right-0 top-10 z-40 w-36 bg-[#1a1b22] border border-[#292931] rounded-xl p-1.5 shadow-xl flex flex-col gap-0.5">
+                      {['All', 'Urgent', 'High', 'Medium', 'Low'].map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => {
+                            setPriorityFilter(p);
+                            setShowFilterDropdown(false);
+                          }}
+                          className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            priorityFilter === p ? 'bg-[#5a45ff] text-white' : 'text-[#c8c4d9] hover:bg-[#292931]'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ))}
                     </div>
-                    <span className="px-2 py-0.5 rounded-full bg-[#93000a]/50 border border-[#ffb4ab]/30 text-[#ffb4ab] text-xs font-semibold">
-                      {overdueTasks.length}
-                    </span>
-                  </div>
+                  </>
+                )}
+              </div>
 
-                  <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      onClick={handleRescheduleAllOverdue}
-                      className="text-xs font-medium text-[#ffb77d] hover:text-[#ffdcc3] flex items-center gap-1.5 bg-[#ffb77d]/10 hover:bg-[#ffb77d]/20 px-2.5 py-1 rounded-lg transition-all active:scale-95"
-                    >
-                      <Clock className="w-3.5 h-3.5" />
-                      <span>Reschedule all</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Overdue Content: Expanded by default */}
-                <div className={`accordion-content ${overdueExpanded ? '' : 'collapsed'}`}>
-                  <div className="accordion-inner">
-                    <div className="flex flex-col gap-2.5 mt-3 pt-3 border-t border-[#292931]">
-                      {overdueTasks.length > 0 ? (
-                        overdueTasks.map((task) => (
-                          <TaskCard
-                            key={task.id}
-                            task={task}
-                            allTasks={tasks}
-                            onToggleCompletion={handleToggleCompletion}
-                            onDrillDown={handleDrillDown}
-                            onEdit={(t) => setSelectedTaskForEdit(t)}
-                            onShowDetails={(t) => setSelectedTaskForDetails(t)}
-                            onAddSubtask={(t) => {
-                              setCreateSubtaskParent(t);
-                              setShowCreateModal(true);
-                            }}
-                            onAdjustParent={(t) => setSelectedTaskForAdjustParent(t)}
-                            onDelete={(t) => setSelectedTaskForDelete(t)}
-                          />
-                        ))
-                      ) : (
-                        <div className="py-6 text-center text-xs text-[#918ea2] bg-[#12131a]/40 rounded-xl border border-dashed border-[#292931]">
-                          No overdue tasks 🎉
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              {/* SECTION 2: Today (EXPANDED BY DEFAULT) */}
-              <section className="bg-[#1a1b22] border border-[#292931] rounded-2xl p-4 md:p-5 shadow-lg transition-all">
-                <div
-                  className="flex items-center justify-between cursor-pointer select-none py-1 group"
-                  onClick={() => setTodayExpanded(!todayExpanded)}
+              {/* Sort Order */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSortDropdown(!showSortDropdown);
+                    setShowFilterDropdown(false);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#12131a] border border-[#292931] hover:bg-[#292931] text-xs font-medium text-[#c8c4d9] transition-all"
                 >
-                  <div className="flex items-center gap-3">
-                    <ChevronDown
-                      className={`w-5 h-5 text-[#5a45ff] transition-transform duration-300 ${
-                        todayExpanded ? 'rotate-0' : '-rotate-90'
-                      }`}
-                    />
+                  <ArrowUpDown className="w-3.5 h-3.5 text-[#5a45ff]" />
+                  <span>Sort</span>
+                  <ChevronDown className="w-3 h-3 text-[#918ea2]" />
+                </button>
+
+                {showSortDropdown && (
+                  <>
+                    <div className="fixed inset-0 z-30" onClick={() => setShowSortDropdown(false)} />
+                    <div className="absolute right-0 top-10 z-40 w-44 bg-[#1a1b22] border border-[#292931] rounded-xl p-1.5 shadow-xl flex flex-col gap-0.5">
+                      {[
+                        { label: 'Due Date: Earliest', value: 'DATE_NEAR' },
+                        { label: 'Due Date: Latest', value: 'DATE_LATE' },
+                        { label: 'Priority: High to Low', value: 'PRIORITY_HIGH' },
+                        { label: 'Priority: Low to High', value: 'PRIORITY_LOW' },
+                        { label: 'Title: A to Z', value: 'TITLE_AZ' },
+                        { label: 'Title: Z to A', value: 'TITLE_ZA' },
+                      ].map((s) => (
+                        <button
+                          key={s.value}
+                          type="button"
+                          onClick={() => {
+                            setSortOption(s.value as TaskSort);
+                            setShowSortDropdown(false);
+                          }}
+                          className={`w-full text-left px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            sortOption === s.value ? 'bg-[#5a45ff] text-white' : 'text-[#c8c4d9] hover:bg-[#292931]'
+                          }`}
+                        >
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Loading Skeleton */}
+          {isLoading ? (
+            <div className="flex flex-col gap-3 py-12 items-center justify-center text-[#918ea2]">
+              <RefreshCw className="w-6 h-6 animate-spin text-[#5a45ff]" />
+              <p className="text-xs">Loading tasks from Supabase...</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-6">
+              {/* =============================================================
+                  1. OVERDUE SECTION (Expanded by default)
+                 ============================================================= */}
+              {overdueTasks.length > 0 && (
+                <section className="flex flex-col gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setOverdueExpanded(!overdueExpanded)}
+                    className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#93000a]/15 border border-[#ffb4ab]/20 hover:bg-[#93000a]/25 text-[#ffb4ab] transition-all cursor-pointer"
+                  >
                     <div className="flex items-center gap-2">
-                      <h2 className="text-base font-semibold text-white tracking-wide">Today</h2>
-                      <span className="text-xs text-[#918ea2] font-normal">
-                        • {new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                      <AlertTriangle className="w-4 h-4 text-[#ffb4ab]" />
+                      <span className="text-xs font-bold uppercase tracking-wider">Overdue</span>
+                      <span className="px-2 py-0.5 rounded-full bg-[#93000a]/40 text-[#ffdad6] text-[10px] font-mono font-bold">
+                        {overdueTasks.length}
                       </span>
                     </div>
-                    <span className="px-2 py-0.5 rounded-full bg-[#5a45ff]/20 text-[#c5c0ff] border border-[#5a45ff]/30 text-xs font-semibold">
-                      {todayTasks.length} remaining
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCreateSubtaskParent(
-                          breadcrumbStack.length > 0 ? breadcrumbStack[breadcrumbStack.length - 1] : null
-                        );
-                        setCreateDefaultSection('TODAY');
-                        setShowCreateModal(true);
-                      }}
-                      className="p-1 rounded-lg hover:bg-[#292931] text-[#918ea2] hover:text-[#e3e1ec] transition-all active:scale-90"
-                      title="Add task for today"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Today Content: Expanded by default */}
-                <div className={`accordion-content ${todayExpanded ? '' : 'collapsed'}`}>
-                  <div className="accordion-inner">
-                    <div className="flex flex-col gap-2.5 mt-3 pt-3 border-t border-[#292931]">
-                      {todayTasks.length > 0 ? (
-                        todayTasks.map((task) => (
-                          <TaskCard
-                            key={task.id}
-                            task={task}
-                            allTasks={tasks}
-                            onToggleCompletion={handleToggleCompletion}
-                            onDrillDown={handleDrillDown}
-                            onEdit={(t) => setSelectedTaskForEdit(t)}
-                            onShowDetails={(t) => setSelectedTaskForDetails(t)}
-                            onAddSubtask={(t) => {
-                              setCreateSubtaskParent(t);
-                              setShowCreateModal(true);
-                            }}
-                            onAdjustParent={(t) => setSelectedTaskForAdjustParent(t)}
-                            onDelete={(t) => setSelectedTaskForDelete(t)}
-                          />
-                        ))
-                      ) : (
-                        <div className="py-6 text-center text-xs text-[#918ea2] bg-[#12131a]/40 rounded-xl border border-dashed border-[#292931]">
-                          No tasks scheduled for today. Click + to add one.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              {/* SECTION 3: Upcoming (COLLAPSED BY DEFAULT) */}
-              <section className="bg-[#1a1b22] border border-[#292931] rounded-2xl p-4 md:p-5 shadow-lg transition-all">
-                <div
-                  className="flex items-center justify-between cursor-pointer select-none py-1 group"
-                  onClick={() => setUpcomingExpanded(!upcomingExpanded)}
-                >
-                  <div className="flex items-center gap-3">
                     <ChevronDown
-                      className={`w-5 h-5 text-[#918ea2] group-hover:text-white transition-transform duration-300 ${
-                        upcomingExpanded ? 'rotate-0' : '-rotate-90'
+                      className={`w-4 h-4 transition-transform duration-200 ${
+                        overdueExpanded ? 'rotate-180' : ''
                       }`}
                     />
-                    <h2 className="text-base font-semibold text-white tracking-wide">Upcoming</h2>
-                    <span className="px-2 py-0.5 rounded-full bg-[#292931] text-[#c8c4d9] text-xs font-medium">
-                      {upcomingTasks.length} scheduled
+                  </button>
+
+                  {overdueExpanded && (
+                    <div className="flex flex-col gap-2 pl-1 animate-entrance">
+                      {overdueTasks.map((task) => (
+                        <TaskCard
+                          key={task.id}
+                          task={task}
+                          allTasks={tasks}
+                          onToggleCompletion={handleToggleCompletion}
+                          onDrillDown={handleDrillDown}
+                          onEdit={(t) => setSelectedTaskForEdit(t)}
+                          onShowDetails={(t) => setSelectedTaskForDetails(t)}
+                          onAddSubtask={(t) => {
+                            setCreateSubtaskParent(t);
+                            setShowCreateModal(true);
+                          }}
+                          onAdjustParent={(t) => setSelectedTaskForAdjustParent(t)}
+                          onDelete={(t) => setSelectedTaskForDelete(t)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {/* =============================================================
+                  2. TODAY SECTION (Expanded by default)
+                 ============================================================= */}
+              <section className="flex flex-col gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setTodayExpanded(!todayExpanded)}
+                  className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#1e1f26] border border-[#292931] hover:border-[#5a45ff]/40 text-white transition-all cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <CalendarIcon className="w-4 h-4 text-[#5a45ff]" />
+                    <span className="text-xs font-bold uppercase tracking-wider">Today</span>
+                    <span className="px-2 py-0.5 rounded-full bg-[#292931] text-[#c8c4d9] text-[10px] font-mono font-bold">
+                      {todayTasks.length}
                     </span>
                   </div>
+                  <ChevronDown
+                    className={`w-4 h-4 text-[#918ea2] transition-transform duration-200 ${
+                      todayExpanded ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
 
-                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCreateSubtaskParent(
-                          breadcrumbStack.length > 0 ? breadcrumbStack[breadcrumbStack.length - 1] : null
-                        );
-                        setCreateDefaultSection('UPCOMING');
-                        setShowCreateModal(true);
-                      }}
-                      className="p-1 rounded-lg hover:bg-[#292931] text-[#918ea2] hover:text-[#e3e1ec] transition-all active:scale-90"
-                      title="Add upcoming task"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
+                {todayExpanded && (
+                  <div className="flex flex-col gap-2 pl-1 animate-entrance">
+                    {todayTasks.length === 0 ? (
+                      <div className="p-6 text-center text-xs text-[#918ea2] border border-dashed border-[#292931] rounded-2xl">
+                        No tasks due today. Enjoy your day or add a new task!
+                      </div>
+                    ) : (
+                      todayTasks.map((task) => (
+                        <TaskCard
+                          key={task.id}
+                          task={task}
+                          allTasks={tasks}
+                          onToggleCompletion={handleToggleCompletion}
+                          onDrillDown={handleDrillDown}
+                          onEdit={(t) => setSelectedTaskForEdit(t)}
+                          onShowDetails={(t) => setSelectedTaskForDetails(t)}
+                          onAddSubtask={(t) => {
+                            setCreateSubtaskParent(t);
+                            setShowCreateModal(true);
+                          }}
+                          onAdjustParent={(t) => setSelectedTaskForAdjustParent(t)}
+                          onDelete={(t) => setSelectedTaskForDelete(t)}
+                        />
+                      ))
+                    )}
                   </div>
-                </div>
-
-                {/* Upcoming Content: Collapsed by default */}
-                <div className={`accordion-content ${upcomingExpanded ? '' : 'collapsed'}`}>
-                  <div className="accordion-inner">
-                    <div className="flex flex-col gap-2.5 mt-3 pt-3 border-t border-[#292931]">
-                      {upcomingTasks.length > 0 ? (
-                        upcomingTasks.map((task) => (
-                          <TaskCard
-                            key={task.id}
-                            task={task}
-                            allTasks={tasks}
-                            onToggleCompletion={handleToggleCompletion}
-                            onDrillDown={handleDrillDown}
-                            onEdit={(t) => setSelectedTaskForEdit(t)}
-                            onShowDetails={(t) => setSelectedTaskForDetails(t)}
-                            onAddSubtask={(t) => {
-                              setCreateSubtaskParent(t);
-                              setShowCreateModal(true);
-                            }}
-                            onAdjustParent={(t) => setSelectedTaskForAdjustParent(t)}
-                            onDelete={(t) => setSelectedTaskForDelete(t)}
-                          />
-                        ))
-                      ) : (
-                        <div className="py-6 text-center text-xs text-[#918ea2] bg-[#12131a]/40 rounded-xl border border-dashed border-[#292931]">
-                          No upcoming tasks scheduled.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                )}
               </section>
 
-              {/* SECTION 4: Completed (COLLAPSED BY DEFAULT) */}
-              <section className="bg-[#1a1b22] border border-[#292931] rounded-2xl p-4 md:p-5 shadow-lg transition-all">
-                <div
-                  className="flex items-center justify-between cursor-pointer select-none py-1 group"
-                  onClick={() => setCompletedExpanded(!completedExpanded)}
-                >
-                  <div className="flex items-center gap-3">
+              {/* =============================================================
+                  3. UPCOMING SECTION (Collapsed by default)
+                 ============================================================= */}
+              {upcomingTasks.length > 0 && (
+                <section className="flex flex-col gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setUpcomingExpanded(!upcomingExpanded)}
+                    className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#1e1f26] border border-[#292931] hover:border-[#5a45ff]/40 text-[#c8c4d9] hover:text-white transition-all cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-[#00f5a0]" />
+                      <span className="text-xs font-bold uppercase tracking-wider">Upcoming</span>
+                      <span className="px-2 py-0.5 rounded-full bg-[#292931] text-[#c8c4d9] text-[10px] font-mono font-bold">
+                        {upcomingTasks.length}
+                      </span>
+                    </div>
                     <ChevronDown
-                      className={`w-5 h-5 text-[#918ea2] group-hover:text-white transition-transform duration-300 ${
-                        completedExpanded ? 'rotate-0' : '-rotate-90'
+                      className={`w-4 h-4 text-[#918ea2] transition-transform duration-200 ${
+                        upcomingExpanded ? 'rotate-180' : ''
                       }`}
                     />
+                  </button>
+
+                  {upcomingExpanded && (
+                    <div className="flex flex-col gap-2 pl-1 animate-entrance">
+                      {upcomingTasks.map((task) => (
+                        <TaskCard
+                          key={task.id}
+                          task={task}
+                          allTasks={tasks}
+                          onToggleCompletion={handleToggleCompletion}
+                          onDrillDown={handleDrillDown}
+                          onEdit={(t) => setSelectedTaskForEdit(t)}
+                          onShowDetails={(t) => setSelectedTaskForDetails(t)}
+                          onAddSubtask={(t) => {
+                            setCreateSubtaskParent(t);
+                            setShowCreateModal(true);
+                          }}
+                          onAdjustParent={(t) => setSelectedTaskForAdjustParent(t)}
+                          onDelete={(t) => setSelectedTaskForDelete(t)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {/* =============================================================
+                  4. COMPLETED SECTION (Collapsed by default)
+                 ============================================================= */}
+              {completedTasks.length > 0 && (
+                <section className="flex flex-col gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setCompletedExpanded(!completedExpanded)}
+                    className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#1e1f26] border border-[#292931] hover:border-[#5a45ff]/40 text-[#918ea2] hover:text-white transition-all cursor-pointer"
+                  >
                     <div className="flex items-center gap-2">
                       <CheckCircle className="w-4 h-4 text-[#00f5a0]" />
-                      <h2 className="text-base font-semibold text-[#c8c4d9] tracking-wide">
-                        Completed
-                      </h2>
+                      <span className="text-xs font-bold uppercase tracking-wider">Completed</span>
+                      <span className="px-2 py-0.5 rounded-full bg-[#292931] text-[#918ea2] text-[10px] font-mono font-bold">
+                        {completedTasks.length}
+                      </span>
                     </div>
-                    <span className="px-2 py-0.5 rounded-full bg-[#292931] text-[#918ea2] text-xs font-medium">
-                      {completedTasks.length} completed
-                    </span>
-                  </div>
+                    <ChevronDown
+                      className={`w-4 h-4 text-[#918ea2] transition-transform duration-200 ${
+                        completedExpanded ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
 
-                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      type="button"
-                      onClick={handleClearCompleted}
-                      className="text-xs text-[#918ea2] hover:text-white transition-colors hover:underline active:scale-95"
-                    >
-                      Clear all
-                    </button>
-                  </div>
-                </div>
-
-                {/* Completed Content: Collapsed by default */}
-                <div className={`accordion-content ${completedExpanded ? '' : 'collapsed'}`}>
-                  <div className="accordion-inner">
-                    <div className="flex flex-col gap-2.5 mt-3 pt-3 border-t border-[#292931]">
-                      {completedTasks.length > 0 ? (
-                        completedTasks.map((task) => (
-                          <TaskCard
-                            key={task.id}
-                            task={task}
-                            allTasks={tasks}
-                            onToggleCompletion={handleToggleCompletion}
-                            onDrillDown={handleDrillDown}
-                            onEdit={(t) => setSelectedTaskForEdit(t)}
-                            onShowDetails={(t) => setSelectedTaskForDetails(t)}
-                            onAddSubtask={(t) => {
-                              setCreateSubtaskParent(t);
-                              setShowCreateModal(true);
-                            }}
-                            onAdjustParent={(t) => setSelectedTaskForAdjustParent(t)}
-                            onDelete={(t) => setSelectedTaskForDelete(t)}
-                          />
-                        ))
-                      ) : (
-                        <div className="py-6 text-center text-xs text-[#918ea2] bg-[#12131a]/40 rounded-xl border border-dashed border-[#292931]">
-                          No completed tasks yet.
-                        </div>
-                      )}
+                  {completedExpanded && (
+                    <div className="flex flex-col gap-2 pl-1 animate-entrance opacity-85">
+                      {completedTasks.map((task) => (
+                        <TaskCard
+                          key={task.id}
+                          task={task}
+                          allTasks={tasks}
+                          onToggleCompletion={handleToggleCompletion}
+                          onDrillDown={handleDrillDown}
+                          onEdit={(t) => setSelectedTaskForEdit(t)}
+                          onShowDetails={(t) => setSelectedTaskForDetails(t)}
+                          onAddSubtask={(t) => {
+                            setCreateSubtaskParent(t);
+                            setShowCreateModal(true);
+                          }}
+                          onAdjustParent={(t) => setSelectedTaskForAdjustParent(t)}
+                          onDelete={(t) => setSelectedTaskForDelete(t)}
+                        />
+                      ))}
                     </div>
-                  </div>
-                </div>
-              </section>
+                  )}
+                </section>
+              )}
             </div>
-          </main>
-        ) : (
-          /* =========================================================================
-              PLACEHOLDER TABS (Matching Android's PlaceholderScreens.kt)
-             ========================================================================= */
-          <main className="flex-1 p-6 md:p-8 max-w-7xl w-full mx-auto flex flex-col justify-center items-center text-center">
-            <div className="bg-[#1a1b22] border border-[#292931] rounded-2xl p-10 max-w-lg w-full flex flex-col items-center gap-4 shadow-xl animate-entrance">
-              <div className="w-16 h-16 rounded-2xl bg-[#5a45ff]/20 text-[#c5c0ff] flex items-center justify-center text-3xl mb-2">
-                {activeTab === 'lists' && <ListTodo className="w-8 h-8 text-[#5a45ff]" />}
-                {activeTab === 'habits' && <Flame className="w-8 h-8 text-[#00f5a0]" />}
-                {activeTab === 'calendar' && <CalendarIcon className="w-8 h-8 text-[#ffb77d]" />}
-                {activeTab === 'analytics' && <TrendingUp className="w-8 h-8 text-[#67e8f9]" />}
-              </div>
-              <h2 className="text-2xl font-bold text-white font-display">
-                {activeTab === 'lists' && 'Lists'}
-                {activeTab === 'habits' && 'Habits Tracker'}
-                {activeTab === 'calendar' && 'Calendar'}
-                {activeTab === 'analytics' && 'Analytics & Insights'}
-              </h2>
-              <p className="text-sm text-[#918ea2] max-w-sm">
-                {activeTab === 'lists' &&
-                  'Organize tasks into flexible projects, shopping, and to-do lists.'}
-                {activeTab === 'habits' &&
-                  'Build daily streaks, monitor routines, and hit consistency targets.'}
-                {activeTab === 'calendar' &&
-                  'Unified monthly & weekly timeline view of all scheduled tasks.'}
-                {activeTab === 'analytics' &&
-                  'Weekly productivity scores, completion rates, and focus trends.'}
-              </p>
-              <button
-                onClick={() => setActiveTab('tasks')}
-                className="mt-4 px-5 py-2.5 rounded-xl bg-[#5a45ff] hover:bg-[#6e5aff] text-white text-xs font-semibold shadow-lg shadow-[#5a45ff]/25 transition-all"
-              >
-                Back to Tasks
-              </button>
-            </div>
-          </main>
-        )}
-      </div>
+          )}
+        </div>
+
+        {/* Floating Add Task Button on Mobile */}
+        <button
+          onClick={() => {
+            setCreateSubtaskParent(currentParentTask);
+            setCreateDefaultSection('TODAY');
+            setShowCreateModal(true);
+          }}
+          className="fixed bottom-6 right-6 md:hidden w-14 h-14 rounded-full bg-[#5a45ff] text-white flex items-center justify-center shadow-2xl shadow-[#5a45ff]/50 hover:bg-[#6e5aff] active:scale-95 transition-all z-30"
+          title="Add Task"
+        >
+          <Plus className="w-6 h-6 stroke-[2.5]" />
+        </button>
+      </main>
 
       {/* =========================================================================
           MODALS & OVERLAYS
          ========================================================================= */}
+      {/* Create Task Modal */}
       <CreateTaskModal
         isOpen={showCreateModal}
         subtaskParent={createSubtaskParent}
@@ -1225,6 +911,7 @@ export const App: React.FC = () => {
         onCreate={handleCreateTask}
       />
 
+      {/* Edit Task Modal */}
       <EditTaskModal
         task={selectedTaskForEdit}
         isOpen={!!selectedTaskForEdit}
@@ -1232,22 +919,37 @@ export const App: React.FC = () => {
         onUpdate={handleUpdateTask}
       />
 
+      {/* Task Details Modal */}
       <TaskDetailsModal
         task={selectedTaskForDetails}
         allTasks={tasks}
         isOpen={!!selectedTaskForDetails}
         onClose={() => setSelectedTaskForDetails(null)}
-        onEdit={(t) => setSelectedTaskForEdit(t)}
-        onAddSubtask={(t) => {
-          setCreateSubtaskParent(t);
+        onEdit={(task) => {
+          setSelectedTaskForDetails(null);
+          setSelectedTaskForEdit(task);
+        }}
+        onDelete={(task) => {
+          setSelectedTaskForDetails(null);
+          setSelectedTaskForDelete(task);
+        }}
+        onAddSubtask={(task) => {
+          setSelectedTaskForDetails(null);
+          setCreateSubtaskParent(task);
           setShowCreateModal(true);
         }}
-        onAdjustParent={(t) => setSelectedTaskForAdjustParent(t)}
-        onDelete={(t) => setSelectedTaskForDelete(t)}
+        onAdjustParent={(task) => {
+          setSelectedTaskForDetails(null);
+          setSelectedTaskForAdjustParent(task);
+        }}
         onToggleCompletion={handleToggleCompletion}
-        onDrillDown={handleDrillDown}
+        onDrillDown={(task) => {
+          setSelectedTaskForDetails(null);
+          handleDrillDown(task);
+        }}
       />
 
+      {/* Adjust Parent / Move Task Modal */}
       <AdjustParentModal
         task={selectedTaskForAdjustParent}
         allTasks={tasks}
@@ -1256,6 +958,7 @@ export const App: React.FC = () => {
         onConfirm={handleAdjustParent}
       />
 
+      {/* Delete Confirmation Modal */}
       <DeleteConfirmModal
         task={selectedTaskForDelete}
         allTasks={tasks}
@@ -1268,19 +971,16 @@ export const App: React.FC = () => {
         }}
       />
 
+      {/* Settings Modal (User details + Logout) */}
       <SettingsModal
         isOpen={showSettingsModal}
         userCode={userCode}
+        userName={session.name}
         onClose={() => setShowSettingsModal(false)}
-        onSaveUserCode={(newCode) => {
-          AuthManager.saveSession(newCode, session.name);
-          setSession({ code: newCode, name: session.name });
-        }}
-        onSyncNow={() => loadTasksFromSupabase()}
         onLogout={handleLogout}
       />
 
-      {/* Undo Notification Bar */}
+      {/* Undo Action Bar */}
       {undoTask && (
         <UndoDoneBar
           taskTitle={undoTask.title}
@@ -1289,11 +989,10 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Toast Notification */}
+      {/* Global Toast Banner */}
       {toastMessage && (
-        <div className="fixed bottom-6 right-6 bg-[#1a1b22] border border-[#00f5a0]/40 text-[#e3e1ec] px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 z-50 animate-entrance">
-          <CheckCircle className="w-5 h-5 text-[#00f5a0]" />
-          <span className="text-xs font-medium">{toastMessage}</span>
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[#1e1f26] border border-[#5a45ff]/40 text-white text-xs px-4 py-2.5 rounded-xl shadow-2xl animate-entrance flex items-center gap-2">
+          <span>{toastMessage}</span>
         </div>
       )}
     </div>

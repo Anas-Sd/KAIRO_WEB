@@ -36,9 +36,6 @@ export const AuthManager = {
     const cleanName = name.trim() || 'User';
     localStorage.setItem(KEY_CODE, cleanCode);
     localStorage.setItem(KEY_NAME, cleanName);
-    window.dispatchEvent(
-      new CustomEvent('kairo_auth_changed', { detail: { code: cleanCode, name: cleanName } })
-    );
     return { code: cleanCode, name: cleanName };
   },
 
@@ -46,13 +43,12 @@ export const AuthManager = {
     localStorage.removeItem(KEY_CODE);
     localStorage.removeItem(KEY_NAME);
     localStorage.removeItem('kairo_user_code');
-    window.dispatchEvent(new CustomEvent('kairo_auth_changed', { detail: null }));
   },
 
   async validateAccessCode(code: string): Promise<UserSession> {
     const trimmed = code.trim().toUpperCase();
     if (!trimmed) {
-      throw new Error('Please enter an access code.');
+      throw new Error('Please enter your 6-character access code.');
     }
 
     // 1. Strict Check: access_codes table in Supabase
@@ -72,7 +68,7 @@ export const AuthManager = {
       console.error('Error querying access_codes in Supabase:', e);
     }
 
-    // 2. Strict Check: tasks table in Supabase
+    // 2. Fallback Check: tasks table in Supabase
     try {
       const { data: taskData, error: taskErr } = await supabase
         .from('tasks')
@@ -92,26 +88,7 @@ export const AuthManager = {
 
     // STRICT: If not found in Supabase access_codes or tasks, REJECT IT!
     throw new Error(
-      `Access code "${trimmed}" was not found in Kairo Supabase. Please verify your code in your Kairo Android app.`
+      `Access code "${trimmed}" was not found in Kairo Supabase database. Please check your code in Kairo Android app Settings.`
     );
-  },
-
-  async registerNewAccessCode(name: string): Promise<UserSession> {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let code = '';
-    for (let i = 0; i < 6; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-
-    try {
-      await supabase.from('access_codes').insert({
-        code,
-        name: name || 'User',
-      });
-    } catch (e) {
-      console.warn('Failed to insert new code into access_codes table:', e);
-    }
-
-    return this.saveSession(code, name || 'User');
   },
 };
