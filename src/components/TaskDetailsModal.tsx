@@ -6,12 +6,14 @@ import {
   MapPin,
   Paperclip,
   Repeat,
+  Music,
   CheckCircle,
   CornerDownRight,
   FolderTree,
   Edit2,
   Trash2,
   PlusCircle,
+  ExternalLink,
 } from 'lucide-react';
 import { Task } from '../types/task';
 
@@ -46,8 +48,8 @@ export const TaskDetailsModal: React.FC<TaskDetailsModalProps> = ({
   const subtasks = allTasks.filter((t) => t.parentId === task.id);
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-entrance">
-      <div className="bg-[#1a1b22] border border-[#292931] rounded-2xl w-full max-w-lg p-6 shadow-2xl flex flex-col gap-4 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4 animate-entrance">
+      <div className="bg-[#1a1b22] border border-[#292931] rounded-2xl w-full max-w-lg p-5 sm:p-6 shadow-2xl flex flex-col gap-4 max-h-[92vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between pb-2 border-b border-[#292931]">
           <div className="flex items-center gap-2">
@@ -67,167 +69,233 @@ export const TaskDetailsModal: React.FC<TaskDetailsModalProps> = ({
           </button>
         </div>
 
-        {/* Title & Parent */}
+        {/* Parent breadcrumb */}
+        {parentTask && (
+          <div className="flex items-center gap-1.5 text-xs text-[#c5c0ff] bg-[#5a45ff]/10 border border-[#5a45ff]/20 px-3 py-1.5 rounded-xl">
+            <CornerDownRight className="w-3.5 h-3.5 text-[#5a45ff]" />
+            <span>Subtask of:</span>
+            <strong
+              className="text-white hover:underline cursor-pointer font-semibold"
+              onClick={() => onDrillDown(parentTask)}
+            >
+              {parentTask.title}
+            </strong>
+          </div>
+        )}
+
+        {/* Title & Notes */}
         <div>
-          {parentTask && (
-            <div className="flex items-center gap-1.5 text-xs text-[#c5c0ff] mb-1">
-              <CornerDownRight className="w-3.5 h-3.5" />
-              <span>Subtask of:</span>
-              <strong className="text-white hover:underline cursor-pointer" onClick={() => onDrillDown(parentTask)}>
-                {parentTask.title}
-              </strong>
-            </div>
-          )}
-          <h2 className="text-lg font-bold text-white">{task.title}</h2>
+          <h2
+            className={`text-lg font-bold text-white break-words ${
+              task.isCompleted ? 'line-through text-[#918ea2]' : ''
+            }`}
+          >
+            {task.title}
+          </h2>
+
           {task.notes && (
-            <p className="text-xs text-[#c8c4d9] mt-2 whitespace-pre-wrap bg-[#12131a] p-3 rounded-xl border border-[#292931]">
+            <p className="text-xs text-[#c8c4d9] mt-2.5 whitespace-pre-wrap bg-[#12131a] p-3.5 rounded-xl border border-[#292931]">
               {task.notes}
             </p>
           )}
         </div>
 
-        {/* Metadata Grid */}
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex items-center gap-2">
-            <span className="text-[#918ea2]">Priority:</span>
+        {/* Core Metadata Badges */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+          {/* Priority */}
+          <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex flex-col gap-0.5">
+            <span className="text-[10px] text-[#918ea2] uppercase tracking-wider">Priority</span>
             <span className="font-semibold text-white">{task.priority}</span>
           </div>
 
-          <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex items-center gap-2">
-            <span className="text-[#918ea2]">Section:</span>
+          {/* Section */}
+          <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex flex-col gap-0.5">
+            <span className="text-[10px] text-[#918ea2] uppercase tracking-wider">Section</span>
             <span className="font-semibold text-white">{task.section}</span>
           </div>
 
-          <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex items-center gap-2">
-            <Calendar className="w-3.5 h-3.5 text-[#5a45ff]" />
-            <span className="text-[#918ea2]">Due:</span>
-            <span className="text-white">{task.dueDate || 'Today'}</span>
+          {/* Status */}
+          <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex flex-col gap-0.5">
+            <span className="text-[10px] text-[#918ea2] uppercase tracking-wider">Status</span>
+            <span className={`font-semibold ${task.isCompleted ? 'text-[#00f5a0]' : 'text-[#c5c0ff]'}`}>
+              {task.isCompleted ? 'Completed' : 'Active'}
+            </span>
           </div>
 
-          {task.dueTime && (
-            <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex items-center gap-2">
-              <Clock className="w-3.5 h-3.5 text-[#5a45ff]" />
-              <span className="text-[#918ea2]">Time:</span>
-              <span className="text-white">{task.dueTime}</span>
-            </div>
-          )}
+          {/* Due Date */}
+          <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex flex-col gap-0.5">
+            <span className="text-[10px] text-[#918ea2] uppercase tracking-wider flex items-center gap-1">
+              <Calendar className="w-3 h-3 text-[#5a45ff]" />
+              Due Date
+            </span>
+            <span className="font-semibold text-white">{task.dueDate || 'None'}</span>
+          </div>
 
-          {task.location && (
-            <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex items-center gap-2 col-span-2">
-              <MapPin className="w-3.5 h-3.5 text-[#67e8f9]" />
-              <span className="text-[#918ea2]">Location:</span>
-              <span className="text-white">{task.location}</span>
-            </div>
-          )}
+          {/* Due Time */}
+          <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex flex-col gap-0.5">
+            <span className="text-[10px] text-[#918ea2] uppercase tracking-wider flex items-center gap-1">
+              <Clock className="w-3 h-3 text-[#5a45ff]" />
+              Due Time
+            </span>
+            <span className="font-semibold text-white">{task.dueTime || 'All Day'}</span>
+          </div>
 
-          {task.repeatType && (
-            <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex items-center gap-2 col-span-2">
-              <Repeat className="w-3.5 h-3.5 text-[#00f5a0]" />
-              <span className="text-[#918ea2]">Repeats:</span>
-              <span className="text-white">{task.repeatType}</span>
-            </div>
-          )}
-
-          {task.attachmentName && (
-            <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex items-center gap-2 col-span-2">
-              <Paperclip className="w-3.5 h-3.5 text-[#ffb77d]" />
-              <span className="text-[#918ea2]">Attachment:</span>
-              <span className="text-white truncate">{task.attachmentName}</span>
-            </div>
-          )}
+          {/* Alarm Tone */}
+          <div className="bg-[#12131a] border border-[#292931] p-2.5 rounded-xl flex flex-col gap-0.5">
+            <span className="text-[10px] text-[#918ea2] uppercase tracking-wider flex items-center gap-1">
+              <Music className="w-3 h-3 text-[#5a45ff]" />
+              Tone
+            </span>
+            <span className="font-semibold text-white truncate">
+              {task.alarmToneTitle || 'Default'}
+            </span>
+          </div>
         </div>
 
-        {/* Subtasks Section */}
-        <div className="pt-2 border-t border-[#292931]">
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="text-xs font-semibold text-white flex items-center gap-1.5">
-              <CornerDownRight className="w-4 h-4 text-[#5a45ff]" />
-              Subtasks ({subtasks.filter((s) => s.isCompleted).length}/{subtasks.length})
-            </h4>
-            <button
-              onClick={() => {
-                onClose();
-                onAddSubtask(task);
-              }}
-              className="text-xs text-[#c5c0ff] hover:text-white flex items-center gap-1 hover:underline"
-            >
-              <PlusCircle className="w-3.5 h-3.5" />
-              Add Subtask
-            </button>
+        {/* Repeat Details (if enabled) */}
+        {task.repeatType && (
+          <div className="bg-[#12131a] border border-[#292931] p-3 rounded-xl flex items-center gap-2.5 text-xs">
+            <Repeat className="w-4 h-4 text-[#00f5a0] flex-shrink-0" />
+            <div className="flex flex-col">
+              <span className="text-[#918ea2] text-[11px]">Repeat Schedule</span>
+              <span className="text-white font-medium">
+                {task.repeatType}
+                {task.repeatDays ? ` (${task.repeatDays})` : ''}
+                {task.repeatDates ? ` (Day ${task.repeatDates})` : ''}
+              </span>
+            </div>
           </div>
+        )}
 
-          {subtasks.length > 0 ? (
-            <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto">
+        {/* Location & Geofence (if enabled) */}
+        {task.location && (
+          <div className="bg-[#12131a] border border-[#292931] p-3 rounded-xl flex items-start gap-2.5 text-xs">
+            <MapPin className="w-4 h-4 text-[#0284c7] flex-shrink-0 mt-0.5" />
+            <div className="flex flex-col flex-1">
+              <span className="text-[#918ea2] text-[11px]">Location & Geofence</span>
+              <span className="text-white font-medium">{task.location}</span>
+              {task.latitude && task.longitude && (
+                <span className="text-[#67e8f9] text-[11px] mt-0.5">
+                  GPS: {task.latitude.toFixed(4)}, {task.longitude.toFixed(4)} (Radius: {task.locationRadius || 500}m)
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Attachment (if present) */}
+        {task.attachmentName && (
+          <div className="bg-[#12131a] border border-[#292931] p-3 rounded-xl flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2 overflow-hidden">
+              <Paperclip className="w-4 h-4 text-[#ffb77d] flex-shrink-0" />
+              <div className="flex flex-col min-w-0">
+                <span className="text-[#918ea2] text-[11px]">Attachment</span>
+                <span className="text-white font-medium truncate">{task.attachmentName}</span>
+              </div>
+            </div>
+
+            {task.attachmentUri && (
+              <a
+                href={task.attachmentUri}
+                download={task.attachmentName}
+                target="_blank"
+                rel="noreferrer"
+                className="p-1.5 rounded-lg bg-[#292931] hover:bg-[#33343c] text-white flex items-center gap-1 text-[11px]"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Open</span>
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* Subtasks Section */}
+        {subtasks.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-[#c8c4d9]">
+                Subtasks ({subtasks.filter((t) => t.isCompleted).length}/{subtasks.length})
+              </span>
+              <button
+                type="button"
+                onClick={() => onDrillDown(task)}
+                className="text-xs text-[#5a45ff] hover:underline"
+              >
+                View in Workspace →
+              </button>
+            </div>
+            <div className="flex flex-col gap-1.5 max-h-36 overflow-y-auto pr-1">
               {subtasks.map((st) => (
                 <div
                   key={st.id}
-                  className="flex items-center justify-between p-2 rounded-lg bg-[#12131a] border border-[#292931] text-xs"
+                  className="flex items-center gap-2 p-2 rounded-lg bg-[#12131a] border border-[#292931] text-xs text-white"
                 >
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => onToggleCompletion(st.id)}
-                      className={`w-4 h-4 rounded flex items-center justify-center border ${
-                        st.isCompleted
-                          ? 'bg-[#00f5a0] border-transparent text-[#003825]'
-                          : 'border-[#474556]'
-                      }`}
-                    >
-                      {st.isCompleted && <CheckCircle className="w-3 h-3" />}
-                    </button>
-                    <span className={st.isCompleted ? 'line-through text-[#918ea2]' : 'text-white'}>
-                      {st.title}
-                    </span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      onClose();
-                      onDrillDown(st);
-                    }}
-                    className="text-[#918ea2] hover:text-white text-[11px]"
-                  >
-                    View &rarr;
-                  </button>
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      st.isCompleted ? 'bg-[#00f5a0]' : 'bg-[#5a45ff]'
+                    }`}
+                  />
+                  <span className={`truncate ${st.isCompleted ? 'line-through text-[#918ea2]' : ''}`}>
+                    {st.title}
+                  </span>
                 </div>
               ))}
             </div>
-          ) : (
-            <p className="text-xs text-[#918ea2] italic py-1">No subtasks yet.</p>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Footer Actions */}
-        <div className="flex items-center justify-between pt-3 border-t border-[#292931]">
-          <button
-            onClick={() => {
-              onClose();
-              onDelete(task);
-            }}
-            className="px-3 py-1.5 rounded-xl text-xs font-medium text-[#ffb4ab] hover:bg-[#93000a]/30 transition-colors flex items-center gap-1.5 active:scale-95"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            Delete
-          </button>
+        <div className="flex items-center justify-between pt-3 border-t border-[#292931] mt-1 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onToggleCompletion(task.id)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all active:scale-95 ${
+                task.isCompleted
+                  ? 'bg-[#12131a] border border-[#292931] text-white hover:bg-[#292931]'
+                  : 'bg-[#00f5a0] text-[#003825] hover:bg-[#00d68b]'
+              }`}
+            >
+              <CheckCircle className="w-3.5 h-3.5" />
+              <span>{task.isCompleted ? 'Mark Active' : 'Mark Done'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onAddSubtask(task)}
+              className="px-3 py-1.5 rounded-xl bg-[#292931] hover:bg-[#33343c] text-white text-xs font-medium flex items-center gap-1.5 transition-colors"
+            >
+              <PlusCircle className="w-3.5 h-3.5 text-[#5a45ff]" />
+              <span>Add Subtask</span>
+            </button>
+          </div>
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => {
-                onClose();
-                onAdjustParent(task);
-              }}
-              className="px-3 py-1.5 rounded-xl text-xs font-medium text-[#c8c4d9] hover:bg-[#292931] transition-colors flex items-center gap-1.5 active:scale-95"
+              type="button"
+              onClick={() => onAdjustParent(task)}
+              className="p-2 rounded-xl bg-[#292931] hover:bg-[#33343c] text-white transition-colors"
+              title="Move Task / Adjust Parent"
             >
-              <FolderTree className="w-3.5 h-3.5" />
-              Adjust Parent
+              <FolderTree className="w-4 h-4 text-[#ffb77d]" />
             </button>
+
             <button
-              onClick={() => {
-                onClose();
-                onEdit(task);
-              }}
-              className="px-4 py-1.5 rounded-xl text-xs font-semibold bg-[#5a45ff] hover:bg-[#6e5aff] text-white transition-all shadow-md shadow-[#5a45ff]/25 flex items-center gap-1.5 active:scale-95"
+              type="button"
+              onClick={() => onEdit(task)}
+              className="p-2 rounded-xl bg-[#292931] hover:bg-[#33343c] text-white transition-colors"
+              title="Edit Task"
             >
-              <Edit2 className="w-3.5 h-3.5" />
-              Edit
+              <Edit2 className="w-4 h-4 text-[#5a45ff]" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onDelete(task)}
+              className="p-2 rounded-xl bg-[#93000a]/20 hover:bg-[#93000a]/40 text-[#ffb4ab] transition-colors"
+              title="Delete Task"
+            >
+              <Trash2 className="w-4 h-4" />
             </button>
           </div>
         </div>

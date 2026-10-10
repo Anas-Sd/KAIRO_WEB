@@ -294,17 +294,25 @@ export const App: React.FC = () => {
       id: taskId,
       title: taskData.title || '',
       notes: taskData.notes || null,
-      priority: taskData.priority || 'MEDIUM',
+      priority: taskData.priority || 'LOW',
       dueDate: taskData.dueDate || 'Today',
-      dueDateMillis: taskData.dueDateMillis || Date.now(),
+      dueDateMillis: taskData.dueDateMillis ?? Date.now(),
       dueTime: taskData.dueTime || null,
       location: taskData.location || null,
-      attachmentName: null,
+      latitude: taskData.latitude ?? null,
+      longitude: taskData.longitude ?? null,
+      locationRadius: taskData.locationRadius ?? 500,
+      attachmentName: taskData.attachmentName || null,
+      attachmentUri: taskData.attachmentUri || null,
+      alarmToneTitle: taskData.alarmToneTitle || 'Default Alarm Tone',
+      alarmToneUri: taskData.alarmToneUri || 'default',
       isCompleted: false,
       section: taskData.section || 'TODAY',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       repeatType: taskData.repeatType || null,
+      repeatDays: taskData.repeatDays || null,
+      repeatDates: taskData.repeatDates || null,
       parentId: taskData.parentId || null,
       position: tasks.length,
       user_code: userCode,
@@ -903,6 +911,7 @@ export const App: React.FC = () => {
       <CreateTaskModal
         isOpen={showCreateModal}
         subtaskParent={createSubtaskParent}
+        allTasks={tasks}
         defaultSection={createDefaultSection}
         onClose={() => {
           setShowCreateModal(false);
@@ -914,6 +923,7 @@ export const App: React.FC = () => {
       {/* Edit Task Modal */}
       <EditTaskModal
         task={selectedTaskForEdit}
+        allTasks={tasks}
         isOpen={!!selectedTaskForEdit}
         onClose={() => setSelectedTaskForEdit(null)}
         onUpdate={handleUpdateTask}
