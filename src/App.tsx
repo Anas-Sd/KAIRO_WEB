@@ -180,16 +180,56 @@ export const App: React.FC = () => {
     return result;
   }, [scopedTasks, priorityFilter, searchQuery, sortOption]);
 
+  /* --------------------------------------------------------------------------
+     Android Dynamic Section Categorization (Exact Match to TaskViewModel.kt)
+     -------------------------------------------------------------------------- */
+  const isOverdue = (task: Task): boolean => {
+    if (task.isCompleted) return false;
+    if (task.dueDate && task.dueDate.toLowerCase().includes('yesterday')) return true;
+    if (task.section === 'OVERDUE') return true;
+
+    if (task.dueDateMillis) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      if (task.dueDateMillis < todayStart.getTime()) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const isToday = (task: Task): boolean => {
+    if (task.isCompleted) return false;
+    if (isOverdue(task)) return false;
+    if (task.dueDate && task.dueDate.toLowerCase().includes('today')) return true;
+    if (task.section === 'TODAY') return true;
+
+    if (task.dueDateMillis) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = todayStart.getTime() + 86400000;
+      return task.dueDateMillis >= todayStart.getTime() && task.dueDateMillis < todayEnd;
+    }
+    return false;
+  };
+
+  const isUpcoming = (task: Task): boolean => {
+    if (task.isCompleted) return false;
+    if (isOverdue(task)) return false;
+    if (isToday(task)) return false;
+    return true;
+  };
+
   const overdueTasks = useMemo(
-    () => filteredTasks.filter((t) => t.section === 'OVERDUE' && !t.isCompleted),
+    () => filteredTasks.filter((t) => isOverdue(t)),
     [filteredTasks]
   );
   const todayTasks = useMemo(
-    () => filteredTasks.filter((t) => t.section === 'TODAY' && !t.isCompleted),
+    () => filteredTasks.filter((t) => isToday(t)),
     [filteredTasks]
   );
   const upcomingTasks = useMemo(
-    () => filteredTasks.filter((t) => t.section === 'UPCOMING' && !t.isCompleted),
+    () => filteredTasks.filter((t) => isUpcoming(t)),
     [filteredTasks]
   );
   const completedTasks = useMemo(
@@ -204,10 +244,12 @@ export const App: React.FC = () => {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
 
+    const nextCompleted = !task.isCompleted;
     const updated: Task = {
       ...task,
-      isCompleted: !task.isCompleted,
-      completedAt: !task.isCompleted ? Date.now() : null,
+      isCompleted: nextCompleted,
+      section: nextCompleted ? 'COMPLETED' : 'TODAY',
+      completedAt: nextCompleted ? Date.now() : null,
       updatedAt: Date.now(),
     };
 
@@ -238,6 +280,7 @@ export const App: React.FC = () => {
     const restored: Task = {
       ...task,
       isCompleted: undoTask.previousCompleted,
+      section: undoTask.previousCompleted ? 'COMPLETED' : 'TODAY',
       completedAt: undoTask.previousCompleted ? Date.now() : null,
       updatedAt: Date.now(),
     };
@@ -343,7 +386,7 @@ export const App: React.FC = () => {
   };
 
   const handleRescheduleAllOverdue = async () => {
-    const overdue = tasks.filter((t) => t.section === 'OVERDUE' && !t.isCompleted);
+    const overdue = tasks.filter((t) => isOverdue(t));
     if (overdue.length === 0) {
       showToast('No overdue tasks to reschedule');
       return;
@@ -676,7 +719,7 @@ export const App: React.FC = () => {
             <div
               onClick={() => setShowSettingsModal(true)}
               className="flex items-center gap-2.5 pl-1 cursor-pointer"
-              title={`Logged in as: ${userCode}`}
+              title={`Logged in as: ${userCode} (${session.name})`}
             >
               <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-[#5a45ff] to-[#00f5a0] text-white font-bold flex items-center justify-center text-xs ring-2 ring-[#292931] hover:ring-[#5a45ff]/60 transition-all active:scale-95 shadow-inner">
                 {userCode.slice(0, 2).toUpperCase()}

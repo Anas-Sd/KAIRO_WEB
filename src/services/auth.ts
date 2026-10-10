@@ -36,14 +36,15 @@ export const AuthManager = {
     const cleanName = name.trim() || 'User';
     localStorage.setItem(KEY_CODE, cleanCode);
     localStorage.setItem(KEY_NAME, cleanName);
-    window.dispatchEvent(new CustomEvent('kairo_auth_changed', { detail: { code: cleanCode, name: cleanName } }));
+    window.dispatchEvent(
+      new CustomEvent('kairo_auth_changed', { detail: { code: cleanCode, name: cleanName } })
+    );
     return { code: cleanCode, name: cleanName };
   },
 
   clearSession(): void {
     localStorage.removeItem(KEY_CODE);
     localStorage.removeItem(KEY_NAME);
-    // Also clean up any legacy key
     localStorage.removeItem('kairo_user_code');
     window.dispatchEvent(new CustomEvent('kairo_auth_changed', { detail: null }));
   },
@@ -54,50 +55,45 @@ export const AuthManager = {
       throw new Error('Please enter an access code.');
     }
 
-    // 1. Check access_codes table in Supabase
+    // 1. Strict Check: access_codes table in Supabase
     try {
-      const { data, error } = await supabase
+      const { data: codeData, error: codeErr } = await supabase
         .from('access_codes')
         .select('code, name')
         .eq('code', trimmed);
 
-      if (!error && data && data.length > 0) {
+      if (!codeErr && codeData && codeData.length > 0) {
         return {
-          code: data[0].code,
-          name: data[0].name || 'User',
+          code: codeData[0].code,
+          name: codeData[0].name || 'User',
         };
       }
     } catch (e) {
-      console.warn('Error querying access_codes table:', e);
+      console.error('Error querying access_codes in Supabase:', e);
     }
 
-    // 2. Fallback: check if tasks exist with this user_code
+    // 2. Strict Check: tasks table in Supabase
     try {
-      const { data, error } = await supabase
+      const { data: taskData, error: taskErr } = await supabase
         .from('tasks')
         .select('id')
         .eq('user_code', trimmed)
         .limit(1);
 
-      if (!error && data && data.length > 0) {
+      if (!taskErr && taskData && taskData.length > 0) {
         return {
           code: trimmed,
-          name: 'Kairo User',
+          name: 'User',
         };
       }
     } catch (e) {
-      console.warn('Error checking tasks user_code:', e);
+      console.error('Error querying tasks in Supabase:', e);
     }
 
-    // 3. If valid 4-8 char code, allow session initialization so user can connect their tasks
-    if (trimmed.length >= 4 && trimmed.length <= 10) {
-      return {
-        code: trimmed,
-        name: 'Kairo User',
-      };
-    }
-
-    throw new Error('Invalid access code. Please check your Kairo Android app.');
+    // STRICT: If not found in Supabase access_codes or tasks, REJECT IT!
+    throw new Error(
+      `Access code "${trimmed}" was not found in Kairo Supabase. Please verify your code in your Kairo Android app.`
+    );
   },
 
   async registerNewAccessCode(name: string): Promise<UserSession> {
